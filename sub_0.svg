@@ -1,0 +1,13 @@
+<svg width="1080" height="300" xmlns="http://www.w3.org/2000/svg">
+    <style>
+      .sub {
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "San Francisco", Helvetica, sans-serif;
+        font-size: 46px;
+        font-weight: 400;
+        fill: #ffffff;
+        text-anchor: middle;
+        filter: drop-shadow(0px 4px 10px rgba(0, 0, 0, 0.95));
+      }
+    </style>
+    <text x="540" y="150" class="sub">Halo Selamat Datang di Cafe Kopi Moderen</text>
+  </svg>

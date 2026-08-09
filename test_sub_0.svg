@@ -1,0 +1,13 @@
+<svg width="1080" height="220" xmlns="http://www.w3.org/2000/svg">
+    <style>
+      .subText {
+        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "San Francisco", Helvetica, Arial, sans-serif;
+        font-size: 44px;
+        font-weight: 400;
+        fill: #ffffff;
+        text-anchor: middle;
+        filter: drop-shadow(0px 4px 10px rgba(0, 0, 0, 0.95));
+      }
+    </style>
+    <text x="540" y="130" class="subText">Di sini kamu bisa menikmati aneka variasi kopi spesial dan camilan lezat yang disajikan dengan rasa otentik</text>
+  </svg>

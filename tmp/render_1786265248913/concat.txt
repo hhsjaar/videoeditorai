@@ -1,0 +1,3 @@
+file '/Users/roy/.gemini/antigravity/scratch/auto-video-editor/tmp/render_1786265248913/trimmed_0.mp4'
+file '/Users/roy/.gemini/antigravity/scratch/auto-video-editor/tmp/render_1786265248913/trimmed_1.mp4'
+file '/Users/roy/.gemini/antigravity/scratch/auto-video-editor/tmp/render_1786265248913/trimmed_2.mp4'

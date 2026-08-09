@@ -1,0 +1,25 @@
+<svg width="1080" height="298" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .shadow {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "San Francisco", Helvetica, Arial, sans-serif;
+      font-size: 54px;
+      font-weight: 400;
+      fill: rgba(0, 0, 0, 0.95);
+      text-anchor: middle;
+      stroke: rgba(0, 0, 0, 0.95);
+      stroke-width: 8px;
+      stroke-linejoin: round;
+    }
+    .main {
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "San Francisco", Helvetica, Arial, sans-serif;
+      font-size: 54px;
+      font-weight: 400;
+      fill: #ffffff;
+      text-anchor: middle;
+      stroke: rgba(0, 0, 0, 0.8);
+      stroke-width: 2px;
+    }
+  </style>
+  <text x="543" y="73" class="shadow"><tspan x="543" dy="0">Burjolevelup menjual bukan</tspan><tspan x="543" dy="66">hanya sekadar makanan, tapi</tspan><tspan x="543" dy="66">juga rasa</tspan></text>
+  <text x="540" y="70" class="main"><tspan x="540" dy="0">Burjolevelup menjual bukan</tspan><tspan x="540" dy="66">hanya sekadar makanan, tapi</tspan><tspan x="540" dy="66">juga rasa</tspan></text>
+</svg>
