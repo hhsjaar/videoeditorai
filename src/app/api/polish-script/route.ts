@@ -34,10 +34,23 @@ Aturan Penting:
 Naskah Mentah:
 "${rawScript}"`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-    });
+    const candidateModels = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-1.5-flash", "gemini-flash-latest"];
+    let response: any = null;
+    let lastErr: any = null;
+
+    for (const mName of candidateModels) {
+      try {
+        response = await ai.models.generateContent({
+          model: mName,
+          contents: prompt,
+        });
+        if (response && response.text) break;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+
+    if (!response) throw lastErr || new Error("Gagal memanggil model Gemini.");
 
     const polishedText = response.text?.trim() || rawScript;
 

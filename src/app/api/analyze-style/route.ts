@@ -48,10 +48,23 @@ Aturan penentuan subtitleStyle & recommendedBgmId:
 - subtitleStyle HARUS bernilai salah satu dari: 'plain-shadow', 'yellow', 'white', 'neon', 'box'
 - recommendedBgmId HARUS bernilai salah satu dari: 'fnb-modern-cafe', 'fnb-trendy-bistro', 'fnb-premium-gourmet', 'fnb-streetfood-viral', 'fnb-bakery-sweet', 'fnb-drink-refreshing', 'fnb-brand-commercial', 'fnb-night-bar'`;
 
-    const result = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
-      contents: prompt,
-    });
+    const candidateModels = ["gemini-3.5-flash", "gemini-2.5-flash", "gemini-1.5-flash", "gemini-flash-latest"];
+    let result: any = null;
+    let lastErr: any = null;
+
+    for (const mName of candidateModels) {
+      try {
+        result = await ai.models.generateContent({
+          model: mName,
+          contents: prompt,
+        });
+        if (result && result.text) break;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+
+    if (!result) throw lastErr || new Error("Gagal memanggil model Gemini.");
 
     const responseText = result.text || "";
 

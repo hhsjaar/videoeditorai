@@ -25,7 +25,7 @@ interface SubtitleSegment {
   pngPath: string;
 }
 
-function wrapSubtitleText(text: string, maxCharsPerLine = 32): string[] {
+function wrapSubtitleText(text: string, maxCharsPerLine = 18): string[] {
   const words = text.split(/\s+/);
   const lines: string[] = [];
   let currentLine = "";
@@ -42,6 +42,20 @@ function wrapSubtitleText(text: string, maxCharsPerLine = 32): string[] {
   return lines;
 }
 
+function splitTextIntoAutoCaptionChunks(text: string, wordsPerChunk = 3): string[] {
+  const words = text
+    .replace(/[.!?\n]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+  const chunks: string[] = [];
+  for (let i = 0; i < words.length; i += wordsPerChunk) {
+    chunks.push(words.slice(i, i + wordsPerChunk).join(" "));
+  }
+  return chunks;
+}
+
 // Generate SVG & convert to PNG via macOS built-in sips tool using separate <text> elements
 async function generateSubtitleOverlayPNGs(
   subtitleText: string,
@@ -50,29 +64,31 @@ async function generateSubtitleOverlayPNGs(
   subtitleStyle: string,
   subtitleFontSize: number
 ): Promise<SubtitleSegment[]> {
-  const rawPhrases = subtitleText
-    .split(/[.!?\n]+/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const rawPhrases = splitTextIntoAutoCaptionChunks(subtitleText, 3);
 
   if (rawPhrases.length === 0) return [];
 
-  const segmentDuration = voDuration / rawPhrases.length;
+  const totalChars = rawPhrases.reduce((acc, p) => acc + p.length, 0);
+  let currentStart = 0;
   const segments: SubtitleSegment[] = [];
 
-  // Scale font size proportionally for 1080x1920 9:16 vertical canvas (22px preset -> ~63px in 1080p canvas)
-  const scaledFontSize = Math.round(subtitleFontSize * 2.85);
-  const lineHeight = Math.round(scaledFontSize * 1.3);
+  // Scale font size proportionally for 1080x1920 9:16 vertical canvas (matches Program Monitor ratio 1:1)
+  const scaledFontSize = Math.round(subtitleFontSize * 3.5);
+  const lineHeight = Math.round(scaledFontSize * 1.32);
 
   for (let idx = 0; idx < rawPhrases.length; idx++) {
     const text = rawPhrases[idx];
-    const start = idx * segmentDuration;
-    const end = (idx + 1) * segmentDuration;
+    const ratio = totalChars > 0 ? text.length / totalChars : 1 / rawPhrases.length;
+    const segDur = Math.max(0.5, ratio * voDuration);
+    const start = currentStart;
+    const end = Math.min(voDuration, start + segDur);
+    currentStart = end;
+
     const svgPath = path.join(tempDir, `sub_${idx}.svg`);
     const pngPath = path.join(tempDir, `sub_${idx}.png`);
 
-    // Auto-wrap long phrase into max 32 characters per line (exact 2-line layout like Screenshot 2)
-    const wrappedLines = wrapSubtitleText(text, 32);
+    // Auto-wrap phrase matching Program Monitor wrapping ratio
+    const wrappedLines = wrapSubtitleText(text, 22);
     const startY = 70;
     const totalSvgHeight = startY + wrappedLines.length * lineHeight + 40;
 
@@ -219,42 +235,54 @@ export async function POST(req: NextRequest) {
     const voDuration = await getDuration(voPath);
     console.log(`Voice over duration: ${voDuration}s`);
 
+    const clipDurationsJson = (formData.get("clipDurations") as string) || "[]";
+    let clipDurationsList: number[] = [];
+    try {
+      clipDurationsList = JSON.parse(clipDurationsJson);
+    } catch {}
+
     // Define Pacing Trim Length & Color Grade Filter Graph based on editingStyle
-    let targetTrimSec = 1.8;
+    let defaultTrimSec = parseFloat((formData.get("clipDuration") as string) || "3.0");
     let colorEqFilter = "eq=saturation=1.22:contrast=1.1";
 
     if (editingStyle === "fast-viral") {
-      targetTrimSec = 1.2; // Fast 1.2s cuts per clip
       colorEqFilter = "eq=saturation=1.28:contrast=1.14"; // Warm Food Pop
     } else if (editingStyle === "cinematic-aesthetic") {
-      targetTrimSec = 3.2; // Slow 3.2s aesthetic cuts
       colorEqFilter = "eq=contrast=1.15:brightness=-0.02:saturation=1.08"; // Vintage Mood
     } else if (editingStyle === "brand-commercial") {
-      targetTrimSec = 2.0; // Medium 2.0s commercial cuts
       colorEqFilter = "eq=contrast=1.08:saturation=1.16"; // Clean Commercial
     } else if (editingStyle === "soft-sweet") {
-      targetTrimSec = 2.5; // 2.5s soft cuts
       colorEqFilter = "eq=brightness=0.03:saturation=1.12"; // Soft Warm Brightness
     }
 
-    // 2. Process each footage: trim with specific pacing length & apply 9:16 + color grade
+    // 2. Process each footage: trim with specific per-clip length & apply 9:16 + color grade
     const trimmedClips: string[] = [];
     for (let i = 0; i < footageFiles.length; i++) {
       const inputPath = footageFiles[i];
-      const clipDuration = await getDuration(inputPath);
+      const actualFileDuration = await getDuration(inputPath);
+      const targetSec = (clipDurationsList[i] && clipDurationsList[i] > 0) ? clipDurationsList[i] : defaultTrimSec;
 
-      const trimmedLen = Math.min(targetTrimSec, Math.max(1.0, clipDuration / 2));
-      const startTime = Math.max(0, (clipDuration - trimmedLen) / 2);
+      const trimmedLen = Math.min(targetSec, Math.max(0.5, actualFileDuration));
+      const startTime = Math.max(0, (actualFileDuration - trimmedLen) / 2);
 
       const outputPath = path.join(tempDir, `trimmed_${i}.mp4`);
 
-      const filterGraph = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,${colorEqFilter},setsar=1[v]`;
+      const filterGraph = `[0:v]fps=60,scale=1080:1920:force_original_aspect_ratio=increase:flags=lanczos,crop=1080:1920,${colorEqFilter},setsar=1[v]`;
 
       await new Promise<void>((resolve, reject) => {
         ffmpeg(inputPath)
           .setStartTime(startTime)
           .setDuration(trimmedLen)
-          .outputOptions(["-vf", filterGraph, "-an", "-c:v", "libx264", "-preset", "fast"])
+          .outputOptions([
+            "-vf", filterGraph,
+            "-r", "60",
+            "-threads", "0",
+            "-an",
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "14",
+            "-pix_fmt", "yuv420p"
+          ])
           .save(outputPath)
           .on("end", () => resolve())
           .on("error", (err) => reject(err));
@@ -263,38 +291,122 @@ export async function POST(req: NextRequest) {
       trimmedClips.push(outputPath);
     }
 
-    // 3. Concatenate video clips & loop if necessary to match VO duration
-    const concatListPath = path.join(tempDir, "concat.txt");
-    let concatContent = "";
+    const transitionsJson = (formData.get("transitions") as string) || "[]";
+    let transitionsList: Array<{ type: string; afterClipIndex: number; duration: number }> = [];
+    try {
+      transitionsList = JSON.parse(transitionsJson);
+    } catch {}
 
+    // 3. Concatenate video clips with FFmpeg xfade transitions
+    const clipsToConcat: string[] = [];
     let currentLen = 0;
     let clipIndex = 0;
+
     while (currentLen < voDuration) {
       const clipPath = trimmedClips[clipIndex % trimmedClips.length];
       const duration = await getDuration(clipPath);
-      concatContent += `file '${clipPath}'\n`;
+      clipsToConcat.push(clipPath);
       currentLen += duration;
       clipIndex++;
     }
-    await writeFile(concatListPath, concatContent);
 
     const mergedFootagePath = path.join(tempDir, "merged_footage.mp4");
-    await new Promise<void>((resolve, reject) => {
-      ffmpeg()
-        .input(concatListPath)
-        .inputOptions(["-f", "concat", "-safe", "0"])
-        .outputOptions(["-c", "copy", "-t", voDuration.toString()])
-        .save(mergedFootagePath)
-        .on("end", () => resolve())
-        .on("error", (err) => reject(err));
-    });
+
+    if (clipsToConcat.length === 1) {
+      await new Promise<void>((resolve, reject) => {
+        ffmpeg(clipsToConcat[0])
+          .outputOptions(["-c:v", "libx264", "-preset", "medium", "-crf", "18", "-t", voDuration.toString()])
+          .save(mergedFootagePath)
+          .on("end", () => resolve())
+          .on("error", (err) => reject(err));
+      });
+    } else {
+      const xfadeMap: Record<string, string> = {
+        "light-leak": "hlslice",
+        "passerby": "slideleft",
+        "dissolve-fade": "dissolve",
+        "zoom-blur": "zoomin",
+        "glitch": "pixelize",
+        "cross-fade": "fade",
+        "flash-white": "fadewhite",
+        "fade-black": "fadeblack",
+        "iris-circle": "circlecrop",
+        "wipe-horizontal": "hrslice",
+        "wipe-diagonal": "wipetl",
+        "film-burn": "hblur",
+        "wipe-fade": "wipeleft",
+        "lens-flare": "radial",
+        "vignette": "diagtl",
+        "color-split": "hlwind",
+        "slow-shutter": "fadeblack",
+      };
+
+      const cmd = ffmpeg();
+      clipsToConcat.forEach((cPath) => cmd.input(cPath));
+
+      if (transitionsList.length === 0) {
+        // Pure seamless concatenation for all clips (100% reliable, zero missing clips)
+        const filterInputs = clipsToConcat.map((_, idx) => `[${idx}:v]fps=60,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1[v${idx}]`).join("; ");
+        const filterConcat = clipsToConcat.map((_, idx) => `[v${idx}]`).join("") + `concat=n=${clipsToConcat.length}:v=1:a=0[vmerged_final]`;
+
+        await new Promise<void>((resolve, reject) => {
+          cmd
+            .complexFilter(`${filterInputs}; ${filterConcat}`)
+            .outputOptions([
+              "-map", "[vmerged_final]",
+              "-r", "60",
+              "-threads", "0",
+              "-c:v", "libx264",
+              "-preset", "superfast",
+              "-crf", "16",
+              "-pix_fmt", "yuv420p"
+            ])
+            .save(mergedFootagePath)
+            .on("end", () => resolve())
+            .on("error", (err) => reject(err));
+        });
+      } else {
+        // Concatenate with user transitions via native FFmpeg xfade
+        let currentV = "0:v";
+        const filterChain: string[] = [];
+        let accumOffset = 0;
+
+        for (let i = 0; i < clipsToConcat.length - 1; i++) {
+          const clipDur = await getDuration(clipsToConcat[i]);
+          const customT = transitionsList.find((t) => t.afterClipIndex === (i % trimmedClips.length));
+          const tName = customT ? (xfadeMap[customT.type] || "fade") : "fade";
+          const tDur = customT ? Math.min(clipDur * 0.8, customT.duration || 0.8) : 0.04;
+
+          accumOffset += clipDur - tDur;
+          const nextV = i === clipsToConcat.length - 2 ? "vmerged_final" : `vxf_${i}`;
+          filterChain.push(`[${currentV}][${i + 1}:v]xfade=transition=${tName}:duration=${tDur.toFixed(3)}:offset=${Math.max(0, accumOffset).toFixed(3)}[${nextV}]`);
+          currentV = nextV;
+        }
+
+        await new Promise<void>((resolve, reject) => {
+          cmd
+            .complexFilter(filterChain.join(";"))
+            .outputOptions([
+              "-map", `[${currentV}]`,
+              "-r", "60",
+              "-threads", "0",
+              "-c:v", "libx264",
+              "-preset", "fast",
+              "-crf", "14",
+              "-pix_fmt", "yuv420p"
+            ])
+            .save(mergedFootagePath)
+            .on("end", () => resolve())
+            .on("error", (err) => reject(err));
+        });
+      }
+    }
 
     // 4. Create Ending Scene (fade-in dissolve transition into ending logo)
     let finalVideoPath = mergedFootagePath;
-    let endingDuration = 0;
+    let endingDuration = parseFloat((formData.get("endingDuration") as string) || "2.5");
 
     if (endingPath) {
-      endingDuration = 2.5; // 2.5 seconds ending logo scene
       const endingVideoPath = path.join(tempDir, "ending_scene.mp4");
 
       await new Promise<void>((resolve, reject) => {
@@ -302,9 +414,9 @@ export async function POST(req: NextRequest) {
           .loop(endingDuration)
           .outputOptions([
             "-vf",
-            "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fade=t=in:st=0:d=1.0,setsar=1",
+            "fps=60,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,fade=t=in:st=0:d=0.8,setsar=1",
             "-r",
-            "30",
+            "60",
             "-c:v",
             "libx264",
             "-pix_fmt",
@@ -315,7 +427,7 @@ export async function POST(req: NextRequest) {
           .on("error", (err) => reject(err));
       });
 
-      // Join main footage + ending scene using concat filter
+      // Join main footage + ending scene using synchronized concat filter graph
       const fullVideoPath = path.join(tempDir, "full_video.mp4");
 
       await new Promise<void>((resolve, reject) => {
@@ -323,11 +435,19 @@ export async function POST(req: NextRequest) {
           .input(mergedFootagePath)
           .input(endingVideoPath)
           .complexFilter([
-            "[0:v]setsar=1[v0]",
-            "[1:v]setsar=1[v1]",
+            "[0:v]fps=60,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1[v0]",
+            "[1:v]fps=60,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1[v1]",
             "[v0][v1]concat=n=2:v=1:a=0[v]",
           ])
-          .outputOptions(["-map", "[v]", "-c:v", "libx264", "-preset", "fast", "-pix_fmt", "yuv420p"])
+          .outputOptions([
+            "-map", "[v]",
+            "-r", "60",
+            "-threads", "0",
+            "-c:v", "libx264",
+            "-preset", "superfast",
+            "-crf", "16",
+            "-pix_fmt", "yuv420p"
+          ])
           .save(fullVideoPath)
           .on("end", () => resolve())
           .on("error", (err) => reject(err));
@@ -336,10 +456,10 @@ export async function POST(req: NextRequest) {
       finalVideoPath = fullVideoPath;
     }
 
-    // Total target video length (VO duration + 2.5s ending cover scene)
-    const totalOutputDuration = voDuration + endingDuration;
+    // Total target video length (EXACT length of assembled finalVideoPath to prevent any black screen or cut-off ending)
+    const totalOutputDuration = await getDuration(finalVideoPath);
 
-    // 5. Generate Subtitle Overlay PNGs (San Francisco Regular + Drop Shadow + Multi-Line Wrapping)
+    // 5. Generate Subtitle Overlay PNGs & Transition FX Overlay PNGs
     const subtitleSegments = await generateSubtitleOverlayPNGs(
       subtitleText,
       voDuration,
@@ -348,7 +468,7 @@ export async function POST(req: NextRequest) {
       subtitleFontSize
     );
 
-    // 6. Final Assembly: Video + VO + BGM + Subtitle Burn-in Overlays
+    // 6. Final Assembly: Video + VO + BGM + Subtitle Overlays
     const outputFinalPath = path.join(tempDir, "output_final.mp4");
 
     await new Promise<void>((resolve, reject) => {
@@ -362,7 +482,7 @@ export async function POST(req: NextRequest) {
         command.input(bgmPath).inputOptions(["-stream_loop", "-1"]);
       }
 
-      // Input 3 (or 2 if no BGM): Subtitle PNGs
+      // Subtitle inputs start index
       const baseSubtitleInputIndex = bgmPath ? 3 : 2;
       subtitleSegments.forEach((seg) => {
         command.input(seg.pngPath);
@@ -401,14 +521,20 @@ export async function POST(req: NextRequest) {
         "[vout]",
         "-map",
         "[aout]",
+        "-r",
+        "60",
+        "-threads",
+        "0",
         "-c:v",
         "libx264",
         "-preset",
         "fast",
+        "-crf",
+        "14",
         "-c:a",
         "aac",
         "-b:a",
-        "192k",
+        "256k",
         "-t",
         totalOutputDuration.toFixed(2),
       ];
@@ -424,7 +550,7 @@ export async function POST(req: NextRequest) {
     const finalBuffer = await require("fs").promises.readFile(outputFinalPath);
 
     // Clean up temporary files asynchronously
-    rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    rm(tempDir, { recursive: true, force: true }).catch(() => { });
 
     return new NextResponse(finalBuffer, {
       headers: {
