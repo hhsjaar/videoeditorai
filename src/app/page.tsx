@@ -549,13 +549,6 @@ export default function AutoVideoStudio() {
     }
   };
 
-  const [userApiKey, setUserApiKey] = useState("");
-
-  useEffect(() => {
-    const savedKey = localStorage.getItem("gemini_api_key");
-    if (savedKey) setUserApiKey(savedKey);
-  }, []);
-
   const handleGenerateAudio = async () => {
     const text = polishedScript || rawScript;
     if (!text.trim()) return alert("Tuliskan naskah terlebih dahulu!");
@@ -564,7 +557,7 @@ export default function AutoVideoStudio() {
       const res = await fetch("/api/generate-speech", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, voiceName: "Zephyr", apiKey: userApiKey }),
+        body: JSON.stringify({ text, voiceName: "Zephyr" }),
       });
       if (!res.ok) {
         const d = await res.json();
@@ -988,28 +981,6 @@ export default function AutoVideoStudio() {
                     )}
                   </button>
                 </div>
-              </div>
-
-              <div className="flex items-center justify-between gap-2 pb-1">
-                <div className="flex items-center gap-2 flex-1 max-w-xs">
-                  <input
-                    type="password"
-                    placeholder="Gemini API Key Opsional (diawali AIzaSy...)"
-                    value={userApiKey}
-                    onChange={(e) => {
-                      setUserApiKey(e.target.value);
-                      localStorage.setItem("gemini_api_key", e.target.value);
-                    }}
-                    className={`w-full text-[10px] px-3 py-1 rounded-lg border ${inputCls}`}
-                  />
-                </div>
-                {userApiKey ? (
-                  <span className="text-[9px] text-emerald-400 font-bold flex items-center gap-1">
-                    <CheckCircle2 className="w-3 h-3" /> Key Tersimpan
-                  </span>
-                ) : (
-                  <span className="text-[9px] text-slate-400">Atau diisi via .env.local VPS</span>
-                )}
               </div>
 
               <textarea
