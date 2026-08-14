@@ -40,6 +40,8 @@ import {
   Palette,
   Check,
   Grid,
+  Copy,
+  Clipboard,
 } from "lucide-react";
 import { MainCompositionProps, FootageItem, TransitionItem, SubtitleChunk } from "../remotion/types";
 
@@ -80,6 +82,7 @@ export default function CapCutWebStudio() {
   const [clipDuration, setClipDuration] = useState<number>(3.0);
   const [customClipDurations, setCustomClipDurations] = useState<{ [key: number]: number }>({});
   const [selectedClipIndex, setSelectedClipIndex] = useState<number | null>(null);
+  const [copiedClip, setCopiedClip] = useState<UploadedFootage | null>(null);
 
   // Playhead & Scrubber state (Dynamic Frame Sync)
   const [currentTimeSec, setCurrentTimeSec] = useState<number>(0);
@@ -132,7 +135,7 @@ export default function CapCutWebStudio() {
   };
 
   // Split Footage Cut (Gunting ✂️) at Playhead Position
-  const handleSplitClipAtPlayhead = () => {
+  const handleSplitClipAtPlayhead = useCallback(() => {
     if (footages.length === 0) return alert("Upload klip video terlebih dahulu!");
 
     let acc = 0;
@@ -179,7 +182,49 @@ export default function CapCutWebStudio() {
 
     setFootages(updatedFootages);
     setCustomClipDurations(newDurMap);
-  };
+  }, [footages, customClipDurations, clipDuration, currentTimeSec]);
+
+  // Copy Clip
+  const handleCopyClip = useCallback(() => {
+    if (selectedClipIndex === null || !footages[selectedClipIndex]) return;
+    setCopiedClip(footages[selectedClipIndex]);
+  }, [selectedClipIndex, footages]);
+
+  // Paste Clip at Playhead
+  const handlePasteClip = useCallback(() => {
+    if (!copiedClip) return;
+    const pasted: UploadedFootage = {
+      ...copiedClip,
+      id: `${Date.now()}_copy`,
+      name: `${copiedClip.name} (Copy)`,
+    };
+    setFootages((prev) => [...prev, pasted]);
+  }, [copiedClip]);
+
+  // Keyboard Shortcuts (Cmd+X, Cmd+C, Cmd+V, Delete, Spacebar)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const isCmdOrCtrl = e.metaKey || e.ctrlKey;
+      if (isCmdOrCtrl && e.key.toLowerCase() === "x") {
+        e.preventDefault();
+        handleSplitClipAtPlayhead();
+      } else if (isCmdOrCtrl && e.key.toLowerCase() === "c") {
+        e.preventDefault();
+        handleCopyClip();
+      } else if (isCmdOrCtrl && e.key.toLowerCase() === "v") {
+        e.preventDefault();
+        handlePasteClip();
+      } else if (e.key === "Delete" || e.key === "Backspace") {
+        if (selectedClipIndex !== null && footages[selectedClipIndex]) {
+          removeFootage(footages[selectedClipIndex].id);
+          setSelectedClipIndex(null);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [handleSplitClipAtPlayhead, handleCopyClip, handlePasteClip, selectedClipIndex, footages]);
 
   // Apply Transition Card to Playhead / Nearest Clip Boundary or All Clips
   const applyTransitionToPlayhead = (transitionId: string) => {
@@ -378,6 +423,7 @@ export default function CapCutWebStudio() {
     clipDuration: clipDuration,
   };
 
+  // EXACT TOTAL DURATION IN FRAMES TO PREVENT EXTRA BLACK FRAMES OR LOOP GLITCHING
   const totalFrames = Math.max(60, Math.round(totalVideoDurationSec * 60));
 
   // Player frame update callback for smooth playhead tracking
@@ -597,22 +643,23 @@ export default function CapCutWebStudio() {
               </span>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
+              <span className="text-[10px] text-slate-400 font-mono">SHORTCUTS: CMD+X (SPLIT) | CMD+C (COPY) | CMD+V (PASTE)</span>
               <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">LIVE SYNC READY</span>
             </div>
           </div>
         </div>
       </div>
 
-      {/* 4. BOTTOM FULL-WIDTH MULTI-TRACK TIMELINE (EXACT CAPCUT MATCH SPANNING CENTER & RIGHT) */}
-      <div className="h-56 bg-[#18181c] border-t border-[#27272a] flex flex-col overflow-hidden z-30">
+      {/* 4. BOTTOM SPACIOUS & PROPORTIONAL MULTI-TRACK TIMELINE (h-76 SPANNING CENTER & RIGHT) */}
+      <div className="h-76 bg-[#18181c] border-t border-[#27272a] flex flex-col overflow-hidden z-30">
         {/* TIMELINE RULER TOP BAR WITH PLAYHEAD PIN (00:04) */}
         <div
           ref={timelineRulerRef}
           onClick={(e) => {
             if (!timelineRulerRef.current) return;
             const rect = timelineRulerRef.current.getBoundingClientRect();
-            const clickX = e.clientX - rect.left - 90; // Adjust for track label width
+            const clickX = e.clientX - rect.left - 90;
             const trackWidth = rect.width - 90;
             if (trackWidth > 0) {
               const clickedTime = Math.max(0, Math.min(totalVideoDurationSec, (clickX / trackWidth) * totalVideoDurationSec));
@@ -620,22 +667,35 @@ export default function CapCutWebStudio() {
               setCurrentTimeSec(parseFloat(clickedTime.toFixed(2)));
             }
           }}
-          className="h-9 bg-[#121215] border-b border-[#27272a] px-3 flex items-center relative select-none cursor-pointer overflow-hidden"
+          className="h-10 bg-[#121215] border-b border-[#27272a] px-3 flex items-center relative select-none cursor-pointer overflow-hidden"
         >
-          {/* TRACK LABELS OFFSET PADDING */}
-          <div className="w-[90px] text-[10px] font-extrabold text-slate-400 flex items-center gap-1.5">
+          {/* TOOLBAR CONTROLS (SPLIT, COPY, PASTE) */}
+          <div className="w-[100px] text-[10px] font-extrabold text-slate-400 flex items-center gap-1.5">
             <button
               onClick={(e) => { e.stopPropagation(); handleSplitClipAtPlayhead(); }}
-              className="p-1 rounded hover:bg-[#27272a] text-rose-400 hover:text-rose-300 cursor-pointer"
-              title="Split Cut (Gunting)"
+              className="p-1 rounded bg-rose-600/20 hover:bg-rose-600/40 text-rose-400 border border-rose-500/40 cursor-pointer"
+              title="Split Cut (Cmd+X)"
             >
               <Scissors className="w-3.5 h-3.5" />
             </button>
-            <span>SPLIT</span>
+            <button
+              onClick={(e) => { e.stopPropagation(); handleCopyClip(); }}
+              className="p-1 rounded bg-[#27272a] hover:bg-[#3f3f46] text-slate-300 border border-[#3f3f46] cursor-pointer"
+              title="Copy Clip (Cmd+C)"
+            >
+              <Copy className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={(e) => { e.stopPropagation(); handlePasteClip(); }}
+              className="p-1 rounded bg-[#27272a] hover:bg-[#3f3f46] text-slate-300 border border-[#3f3f46] cursor-pointer"
+              title="Paste Clip (Cmd+V)"
+            >
+              <Clipboard className="w-3.5 h-3.5" />
+            </button>
           </div>
 
           {/* TIMELINE RULER MARKS (00:00, 00:04, 00:10, 00:20, 00:30, etc.) */}
-          <div className="flex-1 flex justify-between text-[10px] font-mono text-slate-500 font-bold pr-6">
+          <div className="flex-1 flex justify-between text-[10px] font-mono text-slate-400 font-bold pr-6">
             <span>00:00</span>
             <span>00:04</span>
             <span>00:10</span>
@@ -653,11 +713,11 @@ export default function CapCutWebStudio() {
             style={{
               position: "absolute",
               top: 0,
-              bottom: "-200px",
-              left: `calc(90px + ${(currentTimeSec / Math.max(0.1, totalVideoDurationSec)) * 88}%)`,
+              bottom: "-300px",
+              left: `calc(100px + ${(currentTimeSec / Math.max(0.1, totalVideoDurationSec)) * 88}%)`,
               width: "2px",
               backgroundColor: "#ffffff",
-              boxShadow: "0 0 12px rgba(255, 255, 255, 0.9)",
+              boxShadow: "0 0 12px rgba(255, 255, 255, 0.95)",
               zIndex: 50,
               pointerEvents: "none",
             }}
@@ -668,65 +728,101 @@ export default function CapCutWebStudio() {
           </div>
         </div>
 
-        {/* TIMELINE LAYERS CONTAINER */}
-        <div className="flex-1 p-3 overflow-x-auto space-y-2 text-xs select-none">
-          {/* LAYER 1: V1 VIDEO TRACK FILMSTRIP */}
+        {/* SPACIOUS TIMELINE LAYERS CONTAINER */}
+        <div className="flex-1 p-3 overflow-x-auto space-y-3 text-xs select-none">
+          {/* LAYER 1: V1 VIDEO TRACK FILMSTRIP (PROPORTIONAL CLIP WIDTHS) */}
           <div className="flex items-center gap-3">
-            <span className="w-20 text-[10px] font-extrabold text-slate-400">Layer 1</span>
-            <div className="flex-1 flex items-center gap-1 h-14 bg-[#09090b] rounded-xl border border-[#27272a] p-1 overflow-hidden">
+            <span className="w-20 text-[10px] font-extrabold text-slate-400">Layer 1 (V1)</span>
+            <div className="flex-1 flex items-center gap-1.5 h-16 bg-[#09090b] rounded-xl border border-[#27272a] p-1.5 overflow-hidden">
               {footages.length === 0 ? (
                 <div className="w-full text-[10px] text-slate-600 italic text-center">Belum ada klip video di Layer 1</div>
               ) : (
-                footages.map((clip, idx) => (
-                  <React.Fragment key={clip.id}>
-                    <div
-                      onClick={() => setSelectedClipIndex(idx)}
-                      className={`h-full px-2 rounded-lg bg-slate-800 border flex items-center gap-2 transition-all cursor-pointer min-w-[120px] ${
-                        selectedClipIndex === idx ? "border-indigo-500 bg-indigo-950/80" : "border-[#27272a] hover:border-slate-500"
-                      }`}
-                    >
-                      <div className="w-8 h-10 rounded bg-black overflow-hidden flex-shrink-0">
-                        <video src={clip.previewUrl} className="w-full h-full object-cover" />
-                      </div>
-                      <span className="text-[10px] font-bold text-slate-200 truncate">{clip.name}</span>
-                    </div>
+                footages.map((clip, idx) => {
+                  const clipDur = customClipDurations[idx] || clipDuration;
+                  const clipWidthPx = Math.max(110, Math.round((clipDur / Math.max(0.1, totalVideoDurationSec)) * 900));
 
-                    {idx < footages.length - 1 && (
+                  return (
+                    <React.Fragment key={clip.id}>
                       <div
-                        onClick={() => applyTransitionToPlayhead("light-leak")}
-                        className="px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[8px] font-extrabold cursor-pointer"
+                        onClick={() => setSelectedClipIndex(idx)}
+                        style={{ width: `${clipWidthPx}px` }}
+                        className={`h-full px-2 rounded-xl flex items-center gap-2 text-indigo-200 border transition-all cursor-pointer flex-shrink-0 ${
+                          selectedClipIndex === idx ? "border-indigo-400 bg-indigo-900/90 shadow-lg shadow-indigo-600/30 scale-[1.01]" : "border-indigo-500/30 bg-gradient-to-r from-indigo-950/80 to-purple-950/80 hover:border-indigo-400"
+                        }`}
                       >
-                        ⚡ {transitionsMap[idx] || "light-leak"}
+                        <div className="w-10 h-12 rounded bg-black overflow-hidden flex-shrink-0 border border-slate-800">
+                          <video src={clip.previewUrl} className="w-full h-full object-cover" />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[10px] font-bold text-slate-100 truncate">{clip.name}</p>
+                          <p className="text-[8px] text-indigo-300 opacity-80 font-mono">{clipDur}s</p>
+                        </div>
                       </div>
-                    )}
-                  </React.Fragment>
-                ))
+
+                      {idx < footages.length - 1 && (
+                        <div
+                          onClick={() => applyTransitionToPlayhead("light-leak")}
+                          className="px-2 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/40 border border-amber-500/50 text-amber-300 text-[9px] font-extrabold cursor-pointer flex-shrink-0"
+                        >
+                          ⚡ {transitionsMap[idx] || "light-leak"}
+                        </div>
+                      )}
+                    </React.Fragment>
+                  );
+                })
               )}
             </div>
           </div>
 
-          {/* LAYER 2: A1 AUDIO WAVEFORM TRACK (RED/ORANGE TRACK) */}
+          {/* LAYER 2: A1 VOICE OVER TRACK (ONLY SHOWS IF VOICE OVER EXISTS) */}
           <div className="flex items-center gap-3">
-            <span className="w-20 text-[10px] font-extrabold text-slate-400">Layer 2</span>
-            <div className="flex-1 h-8 bg-gradient-to-r from-rose-900/80 via-amber-900/80 to-rose-900/80 rounded-xl border border-rose-500/40 px-3 flex items-center text-rose-200 text-[10px] font-extrabold">
-              <Music className="w-3.5 h-3.5 text-rose-400 mr-2" />
-              <span>Voice Over AI ({selectedVoice}) + BGM Track</span>
+            <span className="w-20 text-[10px] font-extrabold text-amber-400">Layer 2 (A1)</span>
+            <div className="flex-1">
+              {audioUrl ? (
+                <div className="h-10 bg-gradient-to-r from-amber-950/90 via-amber-900/90 to-amber-950/90 border border-amber-500/50 rounded-xl flex items-center px-4 text-amber-200 text-[10px] font-extrabold gap-2 shadow-md">
+                  <Mic className="w-4 h-4 text-amber-400" />
+                  <span>Voice Over AI ({selectedVoice}) Waveform Audio Track</span>
+                </div>
+              ) : (
+                <div className="h-10 bg-[#09090b]/50 rounded-xl border border-dashed border-[#27272a] flex items-center px-4 text-slate-600 italic text-[10px]">
+                  (A1 Voice Over Kosong - Klik Generate Voice Over di Tab Left untuk menambahkan)
+                </div>
+              )}
             </div>
           </div>
 
-          {/* LAYER 3: T1 CAPTIONS TRACK (PURPLE PILL BLOCKS) */}
+          {/* LAYER 3: A2 BGM AUDIO TRACK (ONLY SHOWS IF BGM EXISTS) */}
           <div className="flex items-center gap-3">
-            <span className="w-20 text-[10px] font-extrabold text-slate-400">Layer 3</span>
-            <div className="flex-1 flex items-center gap-2 h-8">
+            <span className="w-20 text-[10px] font-extrabold text-emerald-400">Layer 3 (A2)</span>
+            <div className="flex-1">
+              {bgmUrl ? (
+                <div className="h-10 bg-gradient-to-r from-emerald-950/90 via-teal-900/90 to-emerald-950/90 border border-emerald-500/50 rounded-xl flex items-center px-4 text-emerald-200 text-[10px] font-extrabold gap-2 shadow-md">
+                  <Music className="w-4 h-4 text-emerald-400" />
+                  <span>Background Music Track ({Math.round(bgmVolume * 100)}%)</span>
+                </div>
+              ) : (
+                <div className="h-10 bg-[#09090b]/50 rounded-xl border border-dashed border-[#27272a] flex items-center px-4 text-slate-600 italic text-[10px]">
+                  (A2 BGM Music Kosong - Klik Pilih BGM AI di Tab Audio)
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* LAYER 4: T1 CAPTIONS SUBTITLES TRACK */}
+          <div className="flex items-center gap-3">
+            <span className="w-20 text-[10px] font-extrabold text-purple-400">Layer 4 (T1)</span>
+            <div className="flex-1 flex items-center gap-2 h-10 overflow-hidden">
               {textChunks.length > 0 ? (
                 textChunks.map((chunk, i) => (
-                  <div key={i} className="h-7 px-3 bg-purple-900/80 border border-purple-500/40 text-purple-200 rounded-lg text-[9px] font-extrabold flex items-center gap-1 truncate">
-                    <span>cc</span>
+                  <div key={i} className="h-8 px-3 bg-purple-950/80 border border-purple-500/40 text-purple-200 rounded-xl text-[9px] font-extrabold flex items-center gap-1.5 truncate flex-shrink-0">
+                    <span className="bg-purple-500/20 px-1 rounded text-purple-300">cc</span>
                     <span className="truncate">{chunk}</span>
                   </div>
                 ))
               ) : (
-                <div className="w-full text-[10px] text-slate-600 italic text-center">Belum ada Subtitle Captions di Layer 3</div>
+                <div className="w-full h-10 bg-[#09090b]/50 rounded-xl border border-dashed border-[#27272a] flex items-center px-4 text-slate-600 italic text-[10px]">
+                  (T1 Subtitle Captions Kosong - Tulis Naskah di Tab Left)
+                </div>
               )}
             </div>
           </div>

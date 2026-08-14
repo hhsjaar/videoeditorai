@@ -38,12 +38,13 @@ export const VideoTracks: React.FC<VideoTracksProps> = ({ footages, defaultClipD
         }
 
         return (
-          <Sequence key={index} from={startFrame} durationInFrames={durationFrames}>
+          <Sequence key={`${index}_${clip.url}`} from={startFrame} durationInFrames={durationFrames} layout="none">
             <div
               style={{
+                position: "absolute",
+                inset: 0,
                 width: "100%",
                 height: "100%",
-                position: "relative",
                 overflow: "hidden",
                 filter: filterStyle,
               }}
