@@ -44,8 +44,18 @@ export async function POST(req: NextRequest) {
     const activeApiKey = apiKey || process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY;
     const activeStyle = styleInstruction || DEFAULT_STYLE_INSTRUCTION;
 
+    if (!activeApiKey || activeApiKey.trim().length < 10) {
+      return NextResponse.json(
+        {
+          error:
+            "GEMINI_API_KEY tidak ditemukan atau tidak valid. Silakan buat Gemini API Key gratis di https://aistudio.google.com (diawali 'AIzaSy...') lalu masukkan ke .env.local VPS atau isi di menu Pengaturan API Key web app.",
+        },
+        { status: 400 }
+      );
+    }
+
     try {
-      const ai = new GoogleGenAI({ apiKey: activeApiKey });
+      const ai = new GoogleGenAI({ apiKey: activeApiKey.trim() });
 
       const prompt = `${activeStyle}\n\nBacakan naskah berikut ini dengan alami, jelas, dan percaya diri:\n"${text}"`;
 
@@ -80,64 +90,22 @@ export async function POST(req: NextRequest) {
           });
         }
       }
+
+      return NextResponse.json(
+        { error: "Gemini API tidak mengembalikan data audio Zephyr. Coba lagi dalam beberapa saat." },
+        { status: 500 }
+      );
     } catch (geminiErr: any) {
       console.error("Gemini Zephyr TTS error on server:", geminiErr?.message || geminiErr);
       return NextResponse.json(
-        { error: `Gagal menghasilkan Voice Over Zephyr: ${geminiErr?.message || "Gemini API error"}. Pastikan GEMINI_API_KEY terisi di .env.local VPS` },
-        { status: 500 }
-      );
-    }
-
-    // Fallback TTS generator if no key or Gemini error
-    const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [text];
-    const chunks: string[] = [];
-    let current = "";
-
-    for (const sentence of sentences) {
-      if ((current + sentence).length > 150) {
-        if (current.trim()) chunks.push(current.trim());
-        current = sentence;
-      } else {
-        current += sentence;
-      }
-    }
-    if (current.trim()) chunks.push(current.trim());
-
-    const audioBuffers: Buffer[] = [];
-    const lang = "id";
-
-    for (const chunk of chunks) {
-      const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(
-        chunk
-      )}&tl=${lang}&client=tw-ob`;
-      const res = await fetch(url, {
-        headers: {
-          "User-Agent":
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        {
+          error: `Gagal membuat Suara Zephyr: ${
+            geminiErr?.message || "Gemini API Error"
+          }. Pastikan API Key Gemini yang Anda gunakan valid (diawali 'AIzaSy...').`,
         },
-      });
-
-      if (res.ok) {
-        const buf = await res.arrayBuffer();
-        audioBuffers.push(Buffer.from(buf));
-      }
-    }
-
-    if (audioBuffers.length === 0) {
-      return NextResponse.json(
-        { error: "Gagal membuat audio Voice Over." },
         { status: 500 }
       );
     }
-
-    const audioBuffer = Buffer.concat(audioBuffers);
-
-    return new NextResponse(audioBuffer, {
-      headers: {
-        "Content-Type": "audio/mp3",
-        "Content-Length": audioBuffer.length.toString(),
-      },
-    });
   } catch (error: any) {
     console.error("Error generating speech:", error);
     return NextResponse.json(
