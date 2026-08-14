@@ -51,6 +51,7 @@ export const VideoTracks: React.FC<VideoTracksProps> = ({ footages, defaultClipD
             >
               <OffthreadVideo
                 src={clip.url}
+                volume={0}
                 style={{
                   width: "100%",
                   height: "100%",
