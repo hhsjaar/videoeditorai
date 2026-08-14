@@ -45,6 +45,36 @@ export const RemotionPlayerWrapper: React.FC<PlayerProps> = ({
     }
   }, [seekToSec]);
 
+  // Global Spacebar Play / Pause toggle listener
+  useEffect(() => {
+    const handleGlobalSpace = (e: KeyboardEvent) => {
+      if (e.code === "Space" || e.key === " ") {
+        const target = e.target as HTMLElement | null;
+        if (
+          target &&
+          (target.tagName === "INPUT" ||
+            target.tagName === "TEXTAREA" ||
+            target.isContentEditable)
+        ) {
+          return;
+        }
+        e.preventDefault();
+        const player = playerRef.current;
+        if (!player) return;
+        if (player.isPlaying()) {
+          player.pause();
+        } else {
+          player.play();
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleGlobalSpace);
+    return () => {
+      window.removeEventListener("keydown", handleGlobalSpace);
+    };
+  }, []);
+
   return (
     <Player
       ref={playerRef}
