@@ -965,19 +965,6 @@ export default function AutoVideoStudio() {
                     {isPolishing ? <Loader2 className="w-3.5 h-3.5 animate-spin text-purple-400" /> : <Wand2 className="w-3.5 h-3.5 text-purple-400" />}
                     Polish AI
                   </button>
-                  <select
-                    value={selectedVoice}
-                    onChange={(e) => setSelectedVoice(e.target.value)}
-                    className={`text-[11px] font-bold px-2.5 py-1.5 rounded-lg border cursor-pointer ${isDark ? "bg-[#111827] border-indigo-500/30 text-indigo-300 hover:bg-indigo-950/40" : "bg-slate-100 border-indigo-200 text-indigo-700 hover:bg-indigo-50"}`}
-                    title="Pilih Karakter Suara AI"
-                  >
-                    <option value="Zephyr">👩 Zephyr (Wanita Smooth)</option>
-                    <option value="Puck">👨 Puck (Pria Santai)</option>
-                    <option value="Charon">🧔 Charon (Pria Wibawa)</option>
-                    <option value="Kore">👧 Kore (Wanita Jernih)</option>
-                    <option value="Fenrir">🦁 Fenrir (Pria Komersial)</option>
-                    <option value="Aoede">🎭 Aoede (Wanita Ekspresif)</option>
-                  </select>
                   <button
                     onClick={handleGenerateAudio}
                     disabled={isGeneratingAudio}
@@ -995,6 +982,37 @@ export default function AutoVideoStudio() {
                       </>
                     )}
                   </button>
+                </div>
+              </div>
+
+              {/* VOICE CHARACTER PILLS SELECTOR */}
+              <div className="space-y-1">
+                <span className={`text-[9px] font-bold uppercase tracking-wider ${textSub}`}>Pilih Karakter Suara AI ({selectedVoice}):</span>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { id: "Zephyr", label: "👩 Zephyr", desc: "Wanita Smooth" },
+                    { id: "Puck", label: "👨 Puck", desc: "Pria Santai" },
+                    { id: "Charon", label: "🧔 Charon", desc: "Pria Wibawa" },
+                    { id: "Kore", label: "👧 Kore", desc: "Wanita Jernih" },
+                    { id: "Fenrir", label: "🦁 Fenrir", desc: "Pria Enerjik" },
+                    { id: "Aoede", label: "🎭 Aoede", desc: "Wanita Ekspresif" },
+                  ].map((v) => (
+                    <button
+                      key={v.id}
+                      type="button"
+                      onClick={() => setSelectedVoice(v.id)}
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-all cursor-pointer flex items-center gap-1 ${
+                        selectedVoice === v.id
+                          ? "bg-indigo-600 border-indigo-400 text-white shadow-md shadow-indigo-600/30 scale-105"
+                          : isDark
+                          ? "bg-[#111827] border-[rgba(255,255,255,0.08)] text-slate-300 hover:border-indigo-500/40"
+                          : "bg-slate-100 border-slate-200 text-slate-700 hover:border-slate-300"
+                      }`}
+                    >
+                      <span>{v.label}</span>
+                      <span className="opacity-75 font-normal">({v.desc})</span>
+                    </button>
+                  ))}
                 </div>
               </div>
 
