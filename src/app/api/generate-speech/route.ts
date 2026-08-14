@@ -20,23 +20,29 @@ function getApiKey(passedKey?: string): string {
   if (process.env.NEXT_PUBLIC_GEMINI_API_KEY && process.env.NEXT_PUBLIC_GEMINI_API_KEY.trim().length > 5) return process.env.NEXT_PUBLIC_GEMINI_API_KEY.trim();
 
   try {
-    const envLocalPath = path.join(process.cwd(), ".env.local");
-    if (fs.existsSync(envLocalPath)) {
-      const content = fs.readFileSync(envLocalPath, "utf8");
-      const match = content.match(/GEMINI_API_KEY=["']?([^"'\r\n]+)["']?/);
-      if (match && match[1] && match[1].trim().length > 5) {
-        return match[1].trim();
+    const p1 = path.join(process.cwd(), ".env.local");
+    if (fs.existsSync(p1)) {
+      const content = fs.readFileSync(p1, "utf8");
+      for (const line of content.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("GEMINI_API_KEY=")) {
+          const val = trimmed.substring("GEMINI_API_KEY=".length).replace(/^["']|["']$/g, "").trim();
+          if (val.length > 5) return val;
+        }
       }
     }
   } catch (e) {}
 
   try {
-    const envPath = path.join(process.cwd(), ".env");
-    if (fs.existsSync(envPath)) {
-      const content = fs.readFileSync(envPath, "utf8");
-      const match = content.match(/GEMINI_API_KEY=["']?([^"'\r\n]+)["']?/);
-      if (match && match[1] && match[1].trim().length > 5) {
-        return match[1].trim();
+    const p2 = path.join(process.cwd(), ".env");
+    if (fs.existsSync(p2)) {
+      const content = fs.readFileSync(p2, "utf8");
+      for (const line of content.split("\n")) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith("GEMINI_API_KEY=")) {
+          const val = trimmed.substring("GEMINI_API_KEY=".length).replace(/^["']|["']$/g, "").trim();
+          if (val.length > 5) return val;
+        }
       }
     }
   } catch (e) {}
