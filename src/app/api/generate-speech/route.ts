@@ -44,48 +44,48 @@ export async function POST(req: NextRequest) {
     const activeApiKey = apiKey || process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY;
     const activeStyle = styleInstruction || DEFAULT_STYLE_INSTRUCTION;
 
-    if (!activeApiKey) {
-      console.warn("GEMINI_API_KEY is missing on server environment. Falling back to Google Translate TTS.");
-    } else {
-      try {
-        const ai = new GoogleGenAI({ apiKey: activeApiKey });
+    try {
+      const ai = new GoogleGenAI({ apiKey: activeApiKey });
 
-        const prompt = `${activeStyle}\n\nBacakan naskah berikut ini dengan alami, jelas, dan percaya diri:\n"${text}"`;
+      const prompt = `${activeStyle}\n\nBacakan naskah berikut ini dengan alami, jelas, dan percaya diri:\n"${text}"`;
 
-        const response = await ai.models.generateContent({
-          model: "gemini-2.5-flash-preview-tts",
-          contents: prompt,
-          config: {
-            responseModalities: ["AUDIO"],
-            speechConfig: {
-              voiceConfig: {
-                prebuiltVoiceConfig: {
-                  voiceName: voiceName || "Zephyr",
-                },
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash-preview-tts",
+        contents: prompt,
+        config: {
+          responseModalities: ["AUDIO"],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: {
+                voiceName: voiceName || "Zephyr",
               },
             },
           },
-        });
+        },
+      });
 
-        const parts = response.candidates?.[0]?.content?.parts || [];
-        for (const part of parts) {
-          if (part.inlineData && part.inlineData.data) {
-            const pcmBuffer = Buffer.from(part.inlineData.data, "base64");
-            const wavHeader = createWavHeader(pcmBuffer.length, 24000, 1, 16);
-            const wavBuffer = Buffer.concat([wavHeader, pcmBuffer]);
+      const parts = response.candidates?.[0]?.content?.parts || [];
+      for (const part of parts) {
+        if (part.inlineData && part.inlineData.data) {
+          const pcmBuffer = Buffer.from(part.inlineData.data, "base64");
+          const wavHeader = createWavHeader(pcmBuffer.length, 24000, 1, 16);
+          const wavBuffer = Buffer.concat([wavHeader, pcmBuffer]);
 
-            return new NextResponse(wavBuffer, {
-              headers: {
-                "Content-Type": "audio/wav",
-                "Content-Length": wavBuffer.length.toString(),
-                "X-TTS-Engine": "Gemini-Zephyr",
-              },
-            });
-          }
+          return new NextResponse(wavBuffer, {
+            headers: {
+              "Content-Type": "audio/wav",
+              "Content-Length": wavBuffer.length.toString(),
+              "X-TTS-Engine": "Gemini-Zephyr",
+            },
+          });
         }
-      } catch (geminiErr: any) {
-        console.error("Gemini Zephyr TTS error on server:", geminiErr?.message || geminiErr);
       }
+    } catch (geminiErr: any) {
+      console.error("Gemini Zephyr TTS error on server:", geminiErr?.message || geminiErr);
+      return NextResponse.json(
+        { error: `Gagal menghasilkan Voice Over Zephyr: ${geminiErr?.message || "Gemini API error"}. Pastikan GEMINI_API_KEY terisi di .env.local VPS` },
+        { status: 500 }
+      );
     }
 
     // Fallback TTS generator if no key or Gemini error
