@@ -705,9 +705,29 @@ export default function CapCutWebStudio() {
         </div>
       </div>
 
-      {/* 4. BOTTOM SPACIOUS & PROPORTIONAL MULTI-TRACK TIMELINE (h-76 SPANNING CENTER & RIGHT) */}
-      <div className="h-76 bg-[#18181c] border-t border-[#27272a] flex flex-col overflow-hidden z-30">
-        {/* TIMELINE RULER TOP BAR WITH PLAYHEAD PIN (00:04) */}
+      {/* 4. BOTTOM SPACIOUS & PROPORTIONAL MULTI-TRACK TIMELINE (h-80 SPANNING CENTER & RIGHT) */}
+      <div className="h-80 bg-[#18181c] border-t border-[#27272a] flex flex-col overflow-hidden z-30 relative">
+        {/* FULL HEIGHT WHITE PLAYHEAD LINE DROP DOWN THROUGH ENTIRE TIMELINE (100% HEIGHT) */}
+        <div
+          style={{
+            position: "absolute",
+            top: 0,
+            bottom: 0,
+            left: `calc(100px + ${(currentTimeSec / Math.max(0.1, totalVideoDurationSec)) * 88}%)`,
+            width: "2px",
+            backgroundColor: "#ffffff",
+            boxShadow: "0 0 14px rgba(255, 255, 255, 1), 0 0 4px rgba(255, 255, 255, 0.8)",
+            zIndex: 50,
+            pointerEvents: "none",
+          }}
+        >
+          {/* WHITE TIME BADGE PIN (00:04) AT TOP OF RULER */}
+          <div className="w-12 h-5 rounded-full bg-white text-black font-mono font-extrabold text-[9px] flex items-center justify-center -translate-x-1/2 shadow-xl border border-slate-300">
+            {formatTimecode(currentTimeSec)}
+          </div>
+        </div>
+
+        {/* TIMELINE RULER TOP BAR */}
         <div
           ref={timelineRulerRef}
           onClick={(e) => {
@@ -721,7 +741,7 @@ export default function CapCutWebStudio() {
               setCurrentTimeSec(parseFloat(clickedTime.toFixed(2)));
             }
           }}
-          className="h-10 bg-[#121215] border-b border-[#27272a] px-3 flex items-center relative select-none cursor-pointer overflow-hidden"
+          className="h-10 bg-[#121215] border-b border-[#27272a] px-3 flex items-center relative select-none cursor-pointer overflow-hidden z-20"
         >
           {/* TOOLBAR CONTROLS (SPLIT, COPY, PASTE) */}
           <div className="w-[100px] text-[10px] font-extrabold text-slate-400 flex items-center gap-1.5">
@@ -761,29 +781,10 @@ export default function CapCutWebStudio() {
             <span>01:10</span>
             <span>01:20</span>
           </div>
-
-          {/* ACTIVE WHITE PLAYHEAD PIN BADGE (00:04) & VERTICAL LINE DROP DOWN */}
-          <div
-            style={{
-              position: "absolute",
-              top: 0,
-              bottom: "-300px",
-              left: `calc(100px + ${(currentTimeSec / Math.max(0.1, totalVideoDurationSec)) * 88}%)`,
-              width: "2px",
-              backgroundColor: "#ffffff",
-              boxShadow: "0 0 12px rgba(255, 255, 255, 0.95)",
-              zIndex: 50,
-              pointerEvents: "none",
-            }}
-          >
-            <div className="w-12 h-5 rounded-full bg-white text-black font-mono font-extrabold text-[9px] flex items-center justify-center -translate-x-1/2 shadow-lg border border-slate-300">
-              {formatTimecode(currentTimeSec)}
-            </div>
-          </div>
         </div>
 
         {/* SPACIOUS TIMELINE LAYERS CONTAINER */}
-        <div className="flex-1 p-3 overflow-x-auto space-y-3 text-xs select-none">
+        <div className="flex-1 p-3 overflow-x-auto space-y-3 text-xs select-none z-10">
           {/* LAYER 1: V1 VIDEO TRACK FILMSTRIP (PROPORTIONAL CLIP WIDTHS) */}
           <div className="flex items-center gap-3">
             <span className="w-20 text-[10px] font-extrabold text-slate-400">Layer 1 (V1)</span>
@@ -793,14 +794,14 @@ export default function CapCutWebStudio() {
               ) : (
                 footages.map((clip, idx) => {
                   const clipDur = customClipDurations[idx] || clipDuration;
-                  const clipWidthPx = Math.max(110, Math.round((clipDur / Math.max(0.1, totalVideoDurationSec)) * 900));
+                  const clipPercent = (clipDur / Math.max(0.1, totalVideoDurationSec)) * 100;
 
                   return (
                     <React.Fragment key={clip.id}>
                       <div
                         onClick={() => setSelectedClipIndex(idx)}
-                        style={{ width: `${clipWidthPx}px` }}
-                        className={`h-full px-2 rounded-xl flex items-center gap-2 text-indigo-200 border transition-all cursor-pointer flex-shrink-0 ${
+                        style={{ width: `calc(${clipPercent}% - 8px)` }}
+                        className={`h-full px-2 rounded-xl flex items-center gap-2 text-indigo-200 border transition-all cursor-pointer flex-shrink-0 min-w-[90px] ${
                           selectedClipIndex === idx ? "border-indigo-400 bg-indigo-900/90 shadow-lg shadow-indigo-600/30 scale-[1.01]" : "border-indigo-500/30 bg-gradient-to-r from-indigo-950/80 to-purple-950/80 hover:border-indigo-400"
                         }`}
                       >
