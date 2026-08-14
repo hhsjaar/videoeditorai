@@ -116,18 +116,51 @@ export default function CapCutWebStudio() {
   const [exportProgress, setExportProgress] = useState<number>(0);
   const [exportedVideoUrl, setExportedVideoUrl] = useState<string | null>(null);
 
-  // Handle Footage Upload
-  const handleFootageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Handle Footage Upload with Native Duration Auto-Detection
+  const handleFootageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
     const files = Array.from(e.target.files);
-    const newFootages: UploadedFootage[] = files.map((file, idx) => ({
-      id: `${Date.now()}_${idx}`,
-      file,
-      previewUrl: URL.createObjectURL(file),
-      name: file.name || `VID${(idx + 1).toString().padStart(4, "0")}.mp4`,
-      duration: clipDuration,
-    }));
-    setFootages((prev) => [...prev, ...newFootages]);
+
+    const loadedFootages: UploadedFootage[] = await Promise.all(
+      files.map((file, idx) => {
+        return new Promise<UploadedFootage>((resolve) => {
+          const previewUrl = URL.createObjectURL(file);
+          const tempVid = document.createElement("video");
+          tempVid.src = previewUrl;
+          tempVid.onloadedmetadata = () => {
+            const nativeDur = tempVid.duration && !isNaN(tempVid.duration) && tempVid.duration > 0
+              ? parseFloat(tempVid.duration.toFixed(1))
+              : clipDuration;
+            resolve({
+              id: `${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+              file,
+              previewUrl,
+              name: file.name || `VID${(idx + 1).toString().padStart(4, "0")}.mp4`,
+              duration: nativeDur,
+            });
+          };
+          tempVid.onerror = () => {
+            resolve({
+              id: `${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+              file,
+              previewUrl,
+              name: file.name || `VID${(idx + 1).toString().padStart(4, "0")}.mp4`,
+              duration: clipDuration,
+            });
+          };
+        });
+      })
+    );
+
+    setFootages((prev) => {
+      const combined = [...prev, ...loadedFootages];
+      const newDurMap: { [key: number]: number } = {};
+      combined.forEach((f, i) => {
+        newDurMap[i] = f.duration;
+      });
+      setCustomClipDurations(newDurMap);
+      return combined;
+    });
   };
 
   const removeFootage = (id: string) => {
