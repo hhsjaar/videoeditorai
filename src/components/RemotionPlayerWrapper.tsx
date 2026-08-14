@@ -35,8 +35,11 @@ export const RemotionPlayerWrapper: React.FC<PlayerProps> = ({
     };
   }, [onFrameUpdate]);
 
+  const lastSeekRef = useRef<number | null>(null);
+
   useEffect(() => {
-    if (seekToSec !== undefined && seekToSec !== null && playerRef.current) {
+    if (seekToSec !== undefined && seekToSec !== null && lastSeekRef.current !== seekToSec && playerRef.current) {
+      lastSeekRef.current = seekToSec;
       const targetFrame = Math.round(seekToSec * 60);
       playerRef.current.seekTo(targetFrame);
     }

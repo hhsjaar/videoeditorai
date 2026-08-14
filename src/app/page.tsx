@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import dynamic from "next/dynamic";
 import {
   Film,
@@ -417,35 +417,47 @@ export default function CapCutWebStudio() {
     }
   };
 
-  // Remotion Composition Props calculation
-  const previewFootages: FootageItem[] = footages.map((f, idx) => ({
-    url: f.previewUrl,
-    duration: customClipDurations[idx] || clipDuration,
-    colorGrade: editingStyle,
-  }));
+  // Memoize Remotion Composition Props to prevent @remotion/player re-initialization loops during playback
+  const previewFootages: FootageItem[] = useMemo(() => {
+    return footages.map((f, idx) => ({
+      url: f.previewUrl,
+      duration: customClipDurations[idx] || clipDuration,
+      colorGrade: editingStyle,
+    }));
+  }, [footages, customClipDurations, clipDuration, editingStyle]);
 
-  const previewTransitions: TransitionItem[] = Object.keys(transitionsMap).map((afterIdx) => ({
-    type: transitionsMap[parseInt(afterIdx)],
-    afterClipIndex: parseInt(afterIdx),
-    duration: 0.8,
-  }));
+  const previewTransitions: TransitionItem[] = useMemo(() => {
+    return Object.keys(transitionsMap).map((afterIdx) => ({
+      type: transitionsMap[parseInt(afterIdx)],
+      afterClipIndex: parseInt(afterIdx),
+      duration: 0.8,
+    }));
+  }, [transitionsMap]);
 
   const textToSplit = polishedScript || rawScript;
-  const words = textToSplit.replace(/[.!?\n]+/g, " ").replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
-  const textChunks: string[] = [];
-  for (let i = 0; i < words.length; i += 3) {
-    textChunks.push(words.slice(i, i + 3).join(" "));
-  }
+  const textChunks: string[] = useMemo(() => {
+    const w = textToSplit.replace(/[.!?\n]+/g, " ").replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
+    const chunks: string[] = [];
+    for (let i = 0; i < w.length; i += 3) {
+      chunks.push(w.slice(i, i + 3).join(" "));
+    }
+    return chunks;
+  }, [textToSplit]);
 
-  const totalVideoDurationSec = previewFootages.reduce((acc, f) => acc + f.duration, 0) || 10;
-  const chunkDurSec = totalVideoDurationSec / Math.max(1, textChunks.length);
-  const previewSubtitles: SubtitleChunk[] = textChunks.map((chunkText, i) => ({
-    text: chunkText,
-    start: i * chunkDurSec,
-    end: (i + 1) * chunkDurSec,
-  }));
+  const totalVideoDurationSec = useMemo(() => {
+    return previewFootages.reduce((acc, f) => acc + f.duration, 0) || 10;
+  }, [previewFootages]);
 
-  const remotionCompositionProps: MainCompositionProps = {
+  const previewSubtitles: SubtitleChunk[] = useMemo(() => {
+    const chunkDurSec = totalVideoDurationSec / Math.max(1, textChunks.length);
+    return textChunks.map((chunkText, i) => ({
+      text: chunkText,
+      start: i * chunkDurSec,
+      end: (i + 1) * chunkDurSec,
+    }));
+  }, [textChunks, totalVideoDurationSec]);
+
+  const remotionCompositionProps: MainCompositionProps = useMemo(() => ({
     footages: previewFootages,
     transitions: previewTransitions,
     subtitles: previewSubtitles,
@@ -454,7 +466,16 @@ export default function CapCutWebStudio() {
     bgmVolume: bgmVolume,
     subtitleStyle: subtitleStyle,
     clipDuration: clipDuration,
-  };
+  }), [
+    previewFootages,
+    previewTransitions,
+    previewSubtitles,
+    audioUrl,
+    bgmUrl,
+    bgmVolume,
+    subtitleStyle,
+    clipDuration,
+  ]);
 
   // EXACT TOTAL DURATION IN FRAMES TO PREVENT EXTRA BLACK FRAMES OR LOOP GLITCHING
   const totalFrames = Math.max(60, Math.round(totalVideoDurationSec * 60));
