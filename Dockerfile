@@ -1,12 +1,12 @@
 # Base node image
 FROM node:20-slim
 
-# Install FFmpeg and sips equivalent tools (imagemagick/inkscape/graphicsmagick)
+# Install FFmpeg and ImageMagick for SVG/image rendering on Linux
 RUN apt-get update && apt-get install -y \
     ffmpeg \
-    sips-cmd \
+    imagemagick \
     ca-certificates \
-    && rm -rf /var/lib/apt/lists/* || true
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

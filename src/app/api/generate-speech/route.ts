@@ -12,9 +12,25 @@ const DEFAULT_STYLE_INSTRUCTION = `A friendly and professional real estate prese
 
 The speaker is a knowledgeable and approachable property marketing expert introducing a featured property opportunity to potential buyers. They speak in a confident, friendly, and conversational tone with moderate pacing—clear, engaging, and natural without sounding overly dramatic or overly excited. The delivery should feel persuasive and professional, like an experienced presenter casually but confidently showcasing a quality property in a polished promotional video.`;
 
-export async function POST(req: NextRequest) {
-  const tempDir = path.join(os.tmpdir(), `tts-${Date.now()}`);
+function createWavHeader(dataLength: number, sampleRate = 24000, numChannels = 1, bitsPerSample = 16): Buffer {
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + dataLength, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20); // PCM
+  header.writeUInt16LE(numChannels, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * numChannels * (bitsPerSample / 8), 28);
+  header.writeUInt16LE(numChannels * (bitsPerSample / 8), 32);
+  header.writeUInt16LE(bitsPerSample, 34);
+  header.write("data", 36);
+  header.writeUInt32LE(dataLength, 40);
+  return header;
+}
 
+export async function POST(req: NextRequest) {
   try {
     const { text, apiKey, voiceName = "Zephyr", styleInstruction } = await req.json();
 
@@ -25,12 +41,13 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const activeApiKey = apiKey || process.env.GEMINI_API_KEY;
+    const activeApiKey = apiKey || process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY;
     const activeStyle = styleInstruction || DEFAULT_STYLE_INSTRUCTION;
 
-    if (activeApiKey) {
+    if (!activeApiKey) {
+      console.warn("GEMINI_API_KEY is missing on server environment. Falling back to Google Translate TTS.");
+    } else {
       try {
-        await mkdir(tempDir, { recursive: true });
         const ai = new GoogleGenAI({ apiKey: activeApiKey });
 
         const prompt = `${activeStyle}\n\nBacakan naskah berikut ini dengan alami, jelas, dan percaya diri:\n"${text}"`;
@@ -54,30 +71,20 @@ export async function POST(req: NextRequest) {
         for (const part of parts) {
           if (part.inlineData && part.inlineData.data) {
             const pcmBuffer = Buffer.from(part.inlineData.data, "base64");
-            const pcmPath = path.join(tempDir, "audio.pcm");
-            const mp3Path = path.join(tempDir, "voice.mp3");
+            const wavHeader = createWavHeader(pcmBuffer.length, 24000, 1, 16);
+            const wavBuffer = Buffer.concat([wavHeader, pcmBuffer]);
 
-            await writeFile(pcmPath, pcmBuffer);
-
-            // Convert PCM 24000Hz 16-bit mono to MP3 using ffmpeg
-            await execAsync(`ffmpeg -y -f s16le -ar 24000 -ac 1 -i "${pcmPath}" -b:a 192k "${mp3Path}"`);
-
-            const mp3Buffer = await readFile(mp3Path);
-
-            // Cleanup temp files
-            await unlink(pcmPath).catch(() => {});
-            await unlink(mp3Path).catch(() => {});
-
-            return new NextResponse(mp3Buffer, {
+            return new NextResponse(wavBuffer, {
               headers: {
-                "Content-Type": "audio/mp3",
-                "Content-Length": mp3Buffer.length.toString(),
+                "Content-Type": "audio/wav",
+                "Content-Length": wavBuffer.length.toString(),
+                "X-TTS-Engine": "Gemini-Zephyr",
               },
             });
           }
         }
-      } catch (geminiErr) {
-        console.warn("Gemini Zephyr TTS failed, falling back to Google TTS:", geminiErr);
+      } catch (geminiErr: any) {
+        console.error("Gemini Zephyr TTS error on server:", geminiErr?.message || geminiErr);
       }
     }
 

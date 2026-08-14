@@ -56,7 +56,33 @@ function splitTextIntoAutoCaptionChunks(text: string, wordsPerChunk = 3): string
   return chunks;
 }
 
-// Generate SVG & convert to PNG via macOS built-in sips tool using separate <text> elements
+async function convertSvgToPng(svgPath: string, pngPath: string): Promise<boolean> {
+  // 1. Try macOS built-in sips tool
+  try {
+    await execAsync(`sips -s format png "${svgPath}" --out "${pngPath}"`);
+    return true;
+  } catch {}
+
+  // 2. Try ImageMagick (convert / magick) on Linux VPS
+  try {
+    await execAsync(`convert -background none "${svgPath}" "${pngPath}"`);
+    return true;
+  } catch {}
+  try {
+    await execAsync(`magick -background none "${svgPath}" "${pngPath}"`);
+    return true;
+  } catch {}
+
+  // 3. Try rsvg-convert on Linux
+  try {
+    await execAsync(`rsvg-convert -f png -o "${pngPath}" "${svgPath}"`);
+    return true;
+  } catch {}
+
+  return false;
+}
+
+// Generate SVG & convert to PNG via sips or ImageMagick using separate <text> elements
 async function generateSubtitleOverlayPNGs(
   subtitleText: string,
   voDuration: number,
@@ -158,11 +184,11 @@ async function generateSubtitleOverlayPNGs(
 
     await writeFile(svgPath, svgContent);
 
-    try {
-      await execAsync(`sips -s format png "${svgPath}" --out "${pngPath}"`);
+    const converted = await convertSvgToPng(svgPath, pngPath);
+    if (converted) {
       segments.push({ text, start, end, pngPath });
-    } catch (err) {
-      console.warn(`Failed to convert SVG to PNG for line ${idx}:`, err);
+    } else {
+      console.warn(`Could not convert SVG to PNG for segment ${idx}`);
     }
   }
 
@@ -321,28 +347,26 @@ export async function POST(req: NextRequest) {
           .on("error", (err) => reject(err));
       });
     } else {
+      // Map frontend UI transition names to standard cross-platform FFmpeg xfade transition names
       const xfadeMap: Record<string, string> = {
-        "light-leak": "hlslice",
+        "light-leak": "fadewhite",
         "passerby": "slideleft",
         "dissolve-fade": "dissolve",
-        "zoom-blur": "zoomin",
-        "glitch": "pixelize",
+        "zoom-blur": "dissolve",
+        "glitch": "wipeleft",
         "cross-fade": "fade",
         "flash-white": "fadewhite",
         "fade-black": "fadeblack",
         "iris-circle": "circlecrop",
-        "wipe-horizontal": "hrslice",
-        "wipe-diagonal": "wipetl",
-        "film-burn": "hblur",
+        "wipe-horizontal": "wipeleft",
+        "wipe-diagonal": "wipeleft",
+        "film-burn": "fadeblack",
         "wipe-fade": "wipeleft",
-        "lens-flare": "radial",
-        "vignette": "diagtl",
-        "color-split": "hlwind",
+        "lens-flare": "fadewhite",
+        "vignette": "fadeblack",
+        "color-split": "slideleft",
         "slow-shutter": "fadeblack",
       };
-
-      const cmd = ffmpeg();
-      clipsToConcat.forEach((cPath) => cmd.input(cPath));
 
       if (transitionsList.length === 0) {
         // Pure seamless concatenation for all clips (100% reliable, zero missing clips)
@@ -350,6 +374,8 @@ export async function POST(req: NextRequest) {
         const filterConcat = clipsToConcat.map((_, idx) => `[v${idx}]`).join("") + `concat=n=${clipsToConcat.length}:v=1:a=0[vmerged_final]`;
 
         await new Promise<void>((resolve, reject) => {
+          const cmd = ffmpeg();
+          clipsToConcat.forEach((cPath) => cmd.input(cPath));
           cmd
             .complexFilter(`${filterInputs}; ${filterConcat}`)
             .outputOptions([
@@ -363,42 +389,82 @@ export async function POST(req: NextRequest) {
             ])
             .save(mergedFootagePath)
             .on("end", () => resolve())
-            .on("error", (err) => reject(err));
+            .on("error", (err: any) => reject(err));
         });
       } else {
-        // Concatenate with user transitions via native FFmpeg xfade
-        let currentV = "0:v";
-        const filterChain: string[] = [];
-        let accumOffset = 0;
+        // Concatenate with user transitions via native FFmpeg xfade with resilient fallback
+        const tryXfadeRender = async (transMap: Record<string, string>): Promise<void> => {
+          const formattedInputs = clipsToConcat.map((_, idx) => `[${idx}:v]fps=60,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,format=yuv420p,setsar=1[f${idx}]`).join("; ");
+          let currentV = "f0";
+          const filterChain: string[] = [formattedInputs];
+          let accumOffset = 0;
 
-        for (let i = 0; i < clipsToConcat.length - 1; i++) {
-          const clipDur = await getDuration(clipsToConcat[i]);
-          const customT = transitionsList.find((t) => t.afterClipIndex === (i % trimmedClips.length));
-          const tName = customT ? (xfadeMap[customT.type] || "fade") : "fade";
-          const tDur = customT ? Math.min(clipDur * 0.8, customT.duration || 0.8) : 0.04;
+          for (let i = 0; i < clipsToConcat.length - 1; i++) {
+            const clipDur = await getDuration(clipsToConcat[i]);
+            const customT = transitionsList.find((t) => t.afterClipIndex === (i % trimmedClips.length));
+            const tName = customT ? (transMap[customT.type] || "dissolve") : "dissolve";
+            const tDur = customT ? Math.min(clipDur * 0.4, Math.max(0.1, customT.duration || 0.6)) : 0.4;
 
-          accumOffset += clipDur - tDur;
-          const nextV = i === clipsToConcat.length - 2 ? "vmerged_final" : `vxf_${i}`;
-          filterChain.push(`[${currentV}][${i + 1}:v]xfade=transition=${tName}:duration=${tDur.toFixed(3)}:offset=${Math.max(0, accumOffset).toFixed(3)}[${nextV}]`);
-          currentV = nextV;
+            accumOffset += clipDur - tDur;
+            const nextV = i === clipsToConcat.length - 2 ? "vmerged_final" : `vxf_${i}`;
+            filterChain.push(`[${currentV}][f${i + 1}]xfade=transition=${tName}:duration=${tDur.toFixed(2)}:offset=${Math.max(0, accumOffset).toFixed(2)}[${nextV}]`);
+            currentV = nextV;
+          }
+
+          const cmd = ffmpeg();
+          clipsToConcat.forEach((cPath) => cmd.input(cPath));
+
+          return new Promise<void>((resolve, reject) => {
+            cmd
+              .complexFilter(filterChain.join("; "))
+              .outputOptions([
+                "-map", `[${currentV}]`,
+                "-r", "60",
+                "-threads", "0",
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "14",
+                "-pix_fmt", "yuv420p"
+              ])
+              .save(mergedFootagePath)
+              .on("end", () => resolve())
+              .on("error", (err) => reject(err));
+          });
+        };
+
+        try {
+          await tryXfadeRender(xfadeMap);
+        } catch (xfadeErr) {
+          console.warn("Primary xfade transitions failed on FFmpeg, trying fallback dissolve transitions:", xfadeErr);
+          try {
+            const fallbackMap: Record<string, string> = {};
+            transitionsList.forEach((t) => (fallbackMap[t.type] = "dissolve"));
+            await tryXfadeRender(fallbackMap);
+          } catch (dissolveErr) {
+            console.warn("Dissolve fallback failed, performing seamless concat fallback:", dissolveErr);
+            const filterInputs = clipsToConcat.map((_, idx) => `[${idx}:v]fps=60,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,setsar=1[v${idx}]`).join("; ");
+            const filterConcat = clipsToConcat.map((_, idx) => `[v${idx}]`).join("") + `concat=n=${clipsToConcat.length}:v=1:a=0[vmerged_final]`;
+
+            await new Promise<void>((resolve, reject) => {
+              const cmd = ffmpeg();
+              clipsToConcat.forEach((cPath) => cmd.input(cPath));
+              cmd
+                .complexFilter(`${filterInputs}; ${filterConcat}`)
+                .outputOptions([
+                  "-map", "[vmerged_final]",
+                  "-r", "60",
+                  "-threads", "0",
+                  "-c:v", "libx264",
+                  "-preset", "superfast",
+                  "-crf", "16",
+                  "-pix_fmt", "yuv420p"
+                ])
+                .save(mergedFootagePath)
+                .on("end", () => resolve())
+                .on("error", (err) => reject(err));
+            });
+          }
         }
-
-        await new Promise<void>((resolve, reject) => {
-          cmd
-            .complexFilter(filterChain.join(";"))
-            .outputOptions([
-              "-map", `[${currentV}]`,
-              "-r", "60",
-              "-threads", "0",
-              "-c:v", "libx264",
-              "-preset", "fast",
-              "-crf", "14",
-              "-pix_fmt", "yuv420p"
-            ])
-            .save(mergedFootagePath)
-            .on("end", () => resolve())
-            .on("error", (err) => reject(err));
-        });
       }
     }
 
