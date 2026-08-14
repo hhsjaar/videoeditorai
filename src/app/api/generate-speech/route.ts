@@ -8,9 +8,7 @@ import { promisify } from "util";
 
 const execAsync = promisify(exec);
 
-const DEFAULT_STYLE_INSTRUCTION = `A friendly and professional real estate presenter is filming a cinematic promotional video while showcasing a featured property. The visuals capture the property, surrounding environment, access roads, exterior highlights, and nearby neighborhood with smooth dynamic movement and polished cinematography. The setting feels modern, bright, and premium, creating an engaging yet balanced atmosphere suitable for short-form social media property content. The video should feel polished and visually appealing, with a clean commercial aesthetic and steady, natural pacing.
-
-The speaker is a knowledgeable and approachable property marketing expert introducing a featured property opportunity to potential buyers. They speak in a confident, friendly, and conversational tone with moderate pacing—clear, engaging, and natural without sounding overly dramatic or overly excited. The delivery should feel persuasive and professional, like an experienced presenter casually but confidently showcasing a quality property in a polished promotional video.`;
+const DEFAULT_STYLE_INSTRUCTION = `Anda adalah seorang presenter dan voice over profesional Indonesia yang ramah, komunikatif, dan penuh percaya diri. Ucapkan naskah Bahasa Indonesia berikut ini dengan intonasi yang alami, nada bicara yang hangat dan segar, artikulasi jernih, serta tempo bicara yang pas seperti iklan komersial modern.`;
 
 import fs from "fs";
 
