@@ -12,6 +12,38 @@ const DEFAULT_STYLE_INSTRUCTION = `A friendly and professional real estate prese
 
 The speaker is a knowledgeable and approachable property marketing expert introducing a featured property opportunity to potential buyers. They speak in a confident, friendly, and conversational tone with moderate pacing—clear, engaging, and natural without sounding overly dramatic or overly excited. The delivery should feel persuasive and professional, like an experienced presenter casually but confidently showcasing a quality property in a polished promotional video.`;
 
+import fs from "fs";
+
+function getApiKey(passedKey?: string): string {
+  if (passedKey && passedKey.trim().length > 5) return passedKey.trim();
+  if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 5) return process.env.GEMINI_API_KEY.trim();
+  if (process.env.NEXT_PUBLIC_GEMINI_API_KEY && process.env.NEXT_PUBLIC_GEMINI_API_KEY.trim().length > 5) return process.env.NEXT_PUBLIC_GEMINI_API_KEY.trim();
+
+  try {
+    const envLocalPath = path.join(process.cwd(), ".env.local");
+    if (fs.existsSync(envLocalPath)) {
+      const content = fs.readFileSync(envLocalPath, "utf8");
+      const match = content.match(/GEMINI_API_KEY=["']?([^"'\r\n]+)["']?/);
+      if (match && match[1] && match[1].trim().length > 5) {
+        return match[1].trim();
+      }
+    }
+  } catch (e) {}
+
+  try {
+    const envPath = path.join(process.cwd(), ".env");
+    if (fs.existsSync(envPath)) {
+      const content = fs.readFileSync(envPath, "utf8");
+      const match = content.match(/GEMINI_API_KEY=["']?([^"'\r\n]+)["']?/);
+      if (match && match[1] && match[1].trim().length > 5) {
+        return match[1].trim();
+      }
+    }
+  } catch (e) {}
+
+  return "";
+}
+
 function createWavHeader(dataLength: number, sampleRate = 24000, numChannels = 1, bitsPerSample = 16): Buffer {
   const header = Buffer.alloc(44);
   header.write("RIFF", 0);
@@ -41,21 +73,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const activeApiKey = apiKey || process.env.GEMINI_API_KEY || process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+    const activeApiKey = getApiKey(apiKey);
     const activeStyle = styleInstruction || DEFAULT_STYLE_INSTRUCTION;
 
-    if (!activeApiKey || activeApiKey.trim().length < 10) {
+    if (!activeApiKey) {
       return NextResponse.json(
         {
           error:
-            "GEMINI_API_KEY tidak ditemukan atau tidak valid. Silakan buat Gemini API Key gratis di https://aistudio.google.com (diawali 'AIzaSy...') lalu masukkan ke .env.local VPS atau isi di menu Pengaturan API Key web app.",
+            "GEMINI_API_KEY tidak ditemukan di .env.local VPS server. Jalankan perintah di VPS: echo 'GEMINI_API_KEY=\"AQ.Ab8RN6JEazxVo...\"' > .env.local lalu pm2 restart all",
         },
         { status: 400 }
       );
     }
 
     try {
-      const ai = new GoogleGenAI({ apiKey: activeApiKey.trim() });
+      const ai = new GoogleGenAI({ apiKey: activeApiKey });
 
       const prompt = `${activeStyle}\n\nBacakan naskah berikut ini dengan alami, jelas, dan percaya diri:\n"${text}"`;
 
