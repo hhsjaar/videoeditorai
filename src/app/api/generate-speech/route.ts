@@ -15,9 +15,11 @@ The speaker is a knowledgeable and approachable property marketing expert introd
 import fs from "fs";
 
 function getApiKey(passedKey?: string): string {
-  if (passedKey && passedKey.trim().length > 5) return passedKey.trim();
-  if (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY.trim().length > 5) return process.env.GEMINI_API_KEY.trim();
-  if (process.env.NEXT_PUBLIC_GEMINI_API_KEY && process.env.NEXT_PUBLIC_GEMINI_API_KEY.trim().length > 5) return process.env.NEXT_PUBLIC_GEMINI_API_KEY.trim();
+  const clean = (val?: string) => (val || "").replace(/^["']|["']$/g, "").replace(/["']/g, "").trim();
+
+  if (passedKey && clean(passedKey).length > 5) return clean(passedKey);
+  if (process.env.GEMINI_API_KEY && clean(process.env.GEMINI_API_KEY).length > 5) return clean(process.env.GEMINI_API_KEY);
+  if (process.env.NEXT_PUBLIC_GEMINI_API_KEY && clean(process.env.NEXT_PUBLIC_GEMINI_API_KEY).length > 5) return clean(process.env.NEXT_PUBLIC_GEMINI_API_KEY);
 
   try {
     const p1 = path.join(process.cwd(), ".env.local");
@@ -26,7 +28,7 @@ function getApiKey(passedKey?: string): string {
       for (const line of content.split("\n")) {
         const trimmed = line.trim();
         if (trimmed.startsWith("GEMINI_API_KEY=")) {
-          const val = trimmed.substring("GEMINI_API_KEY=".length).replace(/^["']|["']$/g, "").trim();
+          const val = clean(trimmed.substring("GEMINI_API_KEY=".length));
           if (val.length > 5) return val;
         }
       }
@@ -40,7 +42,7 @@ function getApiKey(passedKey?: string): string {
       for (const line of content.split("\n")) {
         const trimmed = line.trim();
         if (trimmed.startsWith("GEMINI_API_KEY=")) {
-          const val = trimmed.substring("GEMINI_API_KEY=".length).replace(/^["']|["']$/g, "").trim();
+          const val = clean(trimmed.substring("GEMINI_API_KEY=".length));
           if (val.length > 5) return val;
         }
       }
