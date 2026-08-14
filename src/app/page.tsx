@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import dynamic from "next/dynamic";
 import {
   Film,
@@ -9,6 +9,7 @@ import {
   Music,
   Sliders,
   Play,
+  Pause,
   Volume2,
   VolumeX,
   RefreshCw,
@@ -34,10 +35,11 @@ import {
   Clock,
   LayoutGrid,
   Sparkle,
-  Copy,
-  Split,
-  Eye,
-  SlidersHorizontal,
+  Image as ImageIcon,
+  Subtitles,
+  Palette,
+  Check,
+  Grid,
 } from "lucide-react";
 import { MainCompositionProps, FootageItem, TransitionItem, SubtitleChunk } from "../remotion/types";
 
@@ -69,9 +71,9 @@ const AVAILABLE_TRANSITIONS = [
   { id: "vignette", title: "🎭 Color Split", desc: "Vibrant Vignette Flare", category: "Color" },
 ];
 
-export default function AutoVideoEditorStudio() {
-  const [isDark, setIsDark] = useState(true);
-  const [activeTab, setActiveTab] = useState<"media" | "script" | "transitions" | "bgm" | "style" | "copilot">("media");
+export default function CapCutWebStudio() {
+  const [activeNavTab, setActiveNavTab] = useState<"generate" | "video" | "photo" | "audio" | "text" | "effects" | "caption" | "filter">("video");
+  const [aspectRatio, setAspectRatio] = useState<"9:16" | "16:9" | "1:1">("9:16");
 
   // Footages state
   const [footages, setFootages] = useState<UploadedFootage[]>([]);
@@ -79,9 +81,9 @@ export default function AutoVideoEditorStudio() {
   const [customClipDurations, setCustomClipDurations] = useState<{ [key: number]: number }>({});
   const [selectedClipIndex, setSelectedClipIndex] = useState<number | null>(null);
 
-  // Playhead & Scrubber state
+  // Playhead & Scrubber state (Dynamic Frame Sync)
   const [currentTimeSec, setCurrentTimeSec] = useState<number>(0);
-  const [isScrubbing, setIsScrubbing] = useState<boolean>(false);
+  const [seekToSec, setSeekToSec] = useState<number | null>(null);
   const timelineRulerRef = useRef<HTMLDivElement>(null);
 
   // Script & Voice state
@@ -111,13 +113,6 @@ export default function AutoVideoEditorStudio() {
   const [exportProgress, setExportProgress] = useState<number>(0);
   const [exportedVideoUrl, setExportedVideoUrl] = useState<string | null>(null);
 
-  // AI Copilot state
-  const [copilotMessages, setCopilotMessages] = useState<Array<{ role: "user" | "assistant"; text: string }>>([
-    { role: "assistant", text: "Halo! Saya Copilot Studio AI Anda. Ada yang bisa saya bantu untuk memodifikasi video atau memilih transisi sinematik hari ini?" },
-  ]);
-  const [copilotInput, setCopilotInput] = useState<string>("");
-  const [isCopilotThinking, setIsCopilotThinking] = useState<boolean>(false);
-
   // Handle Footage Upload
   const handleFootageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
@@ -126,7 +121,7 @@ export default function AutoVideoEditorStudio() {
       id: `${Date.now()}_${idx}`,
       file,
       previewUrl: URL.createObjectURL(file),
-      name: file.name,
+      name: file.name || `VID${(idx + 1).toString().padStart(4, "0")}.mp4`,
       duration: clipDuration,
     }));
     setFootages((prev) => [...prev, ...newFootages]);
@@ -140,7 +135,6 @@ export default function AutoVideoEditorStudio() {
   const handleSplitClipAtPlayhead = () => {
     if (footages.length === 0) return alert("Upload klip video terlebih dahulu!");
 
-    // Calculate which clip the playhead is currently inside
     let acc = 0;
     let targetIndex = -1;
     let timeInsideClip = 0;
@@ -156,7 +150,7 @@ export default function AutoVideoEditorStudio() {
     }
 
     if (targetIndex === -1 || timeInsideClip < 0.4) {
-      return alert("Posisikan jarum playhead (merah) di tengah klip yang ingin dipotong!");
+      return alert("Posisikan jarum playhead (merah/putih) di tengah klip yang ingin dipotong!");
     }
 
     const targetClip = footages[targetIndex];
@@ -172,7 +166,6 @@ export default function AutoVideoEditorStudio() {
       duration: part2Dur,
     };
 
-    // Update footages array and duration maps
     const updatedFootages = [...footages];
     updatedFootages.splice(targetIndex + 1, 0, part2Clip);
 
@@ -192,7 +185,6 @@ export default function AutoVideoEditorStudio() {
   const applyTransitionToPlayhead = (transitionId: string) => {
     if (footages.length <= 1) return alert("Upload minimal 2 klip video untuk memasang transisi!");
 
-    // Find nearest clip boundary to current playhead time
     let acc = 0;
     let nearestIndex = 0;
     let minDiff = Infinity;
@@ -347,7 +339,7 @@ export default function AutoVideoEditorStudio() {
     }
   };
 
-  // Calculate Remotion Composition Props for real-time player preview
+  // Remotion Composition Props calculation
   const previewFootages: FootageItem[] = footages.map((f, idx) => ({
     url: f.previewUrl,
     duration: customClipDurations[idx] || clipDuration,
@@ -360,7 +352,6 @@ export default function AutoVideoEditorStudio() {
     duration: 0.8,
   }));
 
-  // Word-accurate 2-3 word subtitle chunks matching human speech pace (~3.2 words/sec)
   const textToSplit = polishedScript || rawScript;
   const words = textToSplit.replace(/[.!?\n]+/g, " ").replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
   const textChunks: string[] = [];
@@ -389,573 +380,354 @@ export default function AutoVideoEditorStudio() {
 
   const totalFrames = Math.max(60, Math.round(totalVideoDurationSec * 60));
 
-  // Dynamic Theme Classes
-  const bgClass = isDark ? "bg-[#070A11] text-slate-100" : "bg-slate-50 text-slate-800";
-  const panelClass = isDark ? "bg-[#0E1422]/95 border-[#1C263B]" : "bg-white border-slate-200 shadow-sm";
-  const borderClass = isDark ? "border-[#1C263B]" : "border-slate-200";
-  const textSub = isDark ? "text-slate-400" : "text-slate-500";
-  const inputClass = isDark ? "bg-[#0A0E18] border-[#1C263B] text-slate-100 focus:border-indigo-500" : "bg-slate-50 border-slate-200 text-slate-800 focus:border-indigo-500";
+  // Player frame update callback for smooth playhead tracking
+  const handlePlayerFrameUpdate = useCallback((frame: number) => {
+    const sec = frame / 60;
+    setCurrentTimeSec(parseFloat(sec.toFixed(2)));
+  }, []);
 
-  // Format timecode (e.g. 00:02.5)
+  // Format timecode display (e.g. 00:04 / 01:44)
   const formatTimecode = (sec: number) => {
     const mins = Math.floor(sec / 60);
-    const secs = (sec % 60).toFixed(1);
-    return `${mins.toString().padStart(2, "0")}:${secs.padStart(4, "0")}`;
+    const secs = (sec % 60).toFixed(0);
+    return `${mins.toString().padStart(2, "0")}:${secs.padStart(2, "0")}`;
   };
 
   return (
-    <div className={`flex flex-col h-screen w-screen overflow-hidden font-sans select-none transition-colors duration-200 ${bgClass}`}>
-      {/* 1. TOP HEADER BAR */}
-      <header className={`h-14 px-4 border-b flex items-center justify-between z-40 ${panelClass}`}>
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 via-purple-600 to-pink-600 flex items-center justify-center text-white shadow-lg shadow-indigo-600/30">
-            <Film className="w-4 h-4" />
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-xs font-black tracking-wide uppercase bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">Auto Video Studio Pro</h1>
-              <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">REMOTION 60FPS</span>
-            </div>
-            <p className="text-[10px] text-slate-400 font-medium">9:16 CapCut Studio • Multi-Track Editor</p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2.5">
-          <button
-            onClick={() => setIsDark(!isDark)}
-            className={`p-2 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${isDark ? "bg-[#0A0E18] border-slate-800 text-slate-300 hover:bg-slate-800" : "bg-slate-100 border-slate-200 text-slate-700 hover:bg-slate-200"}`}
-            title="Toggle Light/Dark Theme"
-          >
-            {isDark ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5 text-indigo-600" />}
-          </button>
-
-          <button
-            onClick={handleExportVideo}
-            disabled={isExporting}
-            className="px-4 py-2 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:from-indigo-500 hover:to-pink-500 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-indigo-600/30 active:scale-95 transition-all cursor-pointer disabled:opacity-50"
-          >
-            {isExporting ? <Loader2 className="w-4 h-4 animate-spin text-white" /> : <Download className="w-4 h-4 text-white" />}
-            <span>Export Full HD MP4</span>
-          </button>
-        </div>
-      </header>
-
-      {/* 2. MAIN STUDIO WORKSPACE */}
+    <div className="flex flex-col h-screen w-screen bg-[#121215] text-slate-100 font-sans select-none overflow-hidden">
+      {/* MAIN TOP SECTION: LEFT NAV + SECONDARY PANEL + RIGHT PROGRAM MONITOR */}
       <div className="flex-1 flex overflow-hidden">
-        {/* LEFT TAB NAVIGATION SIDEBAR */}
-        <div className={`w-16 border-r flex flex-col items-center py-3 gap-3 z-30 ${panelClass}`}>
+        {/* 1. LEFT-MOST SLIM ICON NAVIGATION BAR */}
+        <div className="w-16 bg-[#18181c] border-r border-[#27272a] flex flex-col items-center py-4 gap-4 z-40">
           {[
-            { id: "media", label: "Media", icon: VideoIcon },
-            { id: "script", label: "Script & VO", icon: Type },
-            { id: "transitions", label: "Transitions", icon: Layers },
-            { id: "bgm", label: "Audio BGM", icon: Music },
-            { id: "style", label: "Filters", icon: Sliders },
-            { id: "copilot", label: "AI Copilot", icon: Bot },
-          ].map((tab) => {
-            const Icon = tab.icon;
-            const isActive = activeTab === tab.id;
+            { id: "generate", label: "Generate", icon: Sparkles },
+            { id: "video", label: "Video", icon: VideoIcon },
+            { id: "photo", label: "Photo", icon: ImageIcon },
+            { id: "audio", label: "Audio", icon: Music },
+            { id: "text", label: "Text", icon: Type },
+            { id: "effects", label: "Effects", icon: Layers },
+            { id: "caption", label: "Caption", icon: Subtitles },
+            { id: "filter", label: "Filter", icon: Sliders },
+          ].map((nav) => {
+            const Icon = nav.icon;
+            const isActive = activeNavTab === nav.id;
             return (
               <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id as any)}
+                key={nav.id}
+                onClick={() => setActiveNavTab(nav.id as any)}
                 className={`w-12 h-12 rounded-xl flex flex-col items-center justify-center gap-1 transition-all cursor-pointer relative ${
                   isActive
-                    ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/30 font-bold"
-                    : isDark
-                    ? "text-slate-400 hover:bg-[#1C263B] hover:text-slate-200"
-                    : "text-slate-600 hover:bg-slate-100"
+                    ? "bg-[#27272a] text-white font-bold border border-[#3f3f46] shadow-md"
+                    : "text-slate-400 hover:bg-[#27272a]/50 hover:text-slate-200"
                 }`}
-                title={tab.label}
               >
                 <Icon className="w-4 h-4" />
-                <span className="text-[9px] leading-none font-medium">{tab.label}</span>
-                {isActive && <div className="absolute right-0 top-2 bottom-2 w-1 bg-indigo-400 rounded-l-full" />}
+                <span className="text-[9px] leading-none">{nav.label}</span>
+                {isActive && <div className="absolute right-0 top-3 bottom-3 w-1 bg-white rounded-l-full" />}
               </button>
             );
           })}
         </div>
 
-        {/* LEFT CONTROL PANEL (TAB CONTENT) */}
-        <div className={`w-80 border-r flex flex-col overflow-y-auto p-4 gap-4 z-20 ${panelClass}`}>
-          {/* TAB 1: MEDIA ASSETS */}
-          {activeTab === "media" && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h2 className="text-xs font-bold flex items-center gap-2">
-                  <VideoIcon className="w-4 h-4 text-indigo-400" /> Upload Footages ({footages.length})
-                </h2>
-              </div>
+        {/* 2. SECONDARY MEDIA ASSET PANEL (GRID OF VIDEOS) */}
+        <div className="w-80 bg-[#18181c] border-r border-[#27272a] flex flex-col overflow-hidden z-30">
+          {/* HEADER BAR FOR MEDIA GRID */}
+          <div className="p-3 border-b border-[#27272a] flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <button className="p-1.5 rounded-lg hover:bg-[#27272a] text-slate-300">
+                <Grid className="w-4 h-4" />
+              </button>
+              <button className="p-1.5 rounded-lg hover:bg-[#27272a] text-slate-300">
+                <Sliders className="w-4 h-4" />
+              </button>
+            </div>
 
-              <label className={`border-2 border-dashed rounded-2xl p-5 flex flex-col items-center justify-center text-center cursor-pointer transition-all ${isDark ? "border-indigo-500/30 hover:border-indigo-500 hover:bg-indigo-950/20" : "border-indigo-200 hover:border-indigo-400 hover:bg-indigo-50/50"}`}>
-                <Upload className="w-6 h-6 text-indigo-400 mb-1.5" />
-                <span className="text-xs font-bold text-indigo-400">Pilih Klip Video</span>
-                <span className="text-[10px] text-slate-400 mt-0.5">MP4 / MOV (Vertikal 9:16)</span>
-                <input type="file" multiple accept="video/*" onChange={handleFootageUpload} className="hidden" />
-              </label>
+            <label className="px-3 py-1.5 bg-[#27272a] hover:bg-[#3f3f46] text-white rounded-lg text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all border border-[#3f3f46]">
+              <Upload className="w-3.5 h-3.5" />
+              <span>Upload</span>
+              <input type="file" multiple accept="video/*" onChange={handleFootageUpload} className="hidden" />
+            </label>
+          </div>
 
-              {/* FOOTAGES LIST */}
-              <div className="space-y-2">
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Daftar Klip ({footages.length}):</span>
+          {/* TAB CONTENT DETAILS */}
+          <div className="flex-1 p-3 overflow-y-auto space-y-4">
+            {activeNavTab === "video" && (
+              <div className="space-y-3">
+                <div className="text-xs font-bold text-slate-300 flex justify-between items-center">
+                  <span>Daftar Klip Video ({footages.length})</span>
+                  <span className="text-[10px] text-slate-400">MP4 / MOV</span>
+                </div>
+
                 {footages.length === 0 ? (
-                  <p className="text-[11px] text-slate-500 italic text-center py-4">Belum ada klip yang diupload</p>
+                  <div className="border-2 border-dashed border-[#27272a] rounded-xl p-8 text-center space-y-2">
+                    <VideoIcon className="w-8 h-8 text-slate-500 mx-auto" />
+                    <p className="text-xs text-slate-400 font-bold">Belum ada klip yang diupload</p>
+                    <p className="text-[10px] text-slate-500">Klik tombol Upload di atas untuk memilih file video Anda</p>
+                  </div>
                 ) : (
-                  footages.map((clip, idx) => (
-                    <div
-                      key={clip.id}
-                      onClick={() => setSelectedClipIndex(idx)}
-                      className={`p-2.5 rounded-xl border flex items-center gap-2.5 cursor-pointer transition-all ${
-                        selectedClipIndex === idx ? "border-indigo-500 bg-indigo-950/30" : inputClass
-                      }`}
-                    >
-                      <div className="w-12 h-16 rounded-lg bg-black overflow-hidden relative flex-shrink-0">
-                        <video src={clip.previewUrl} className="w-full h-full object-cover" />
-                        <span className="absolute bottom-1 left-1 text-[8px] font-extrabold bg-black/80 text-white px-1 rounded">#{idx + 1}</span>
-                      </div>
-
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-bold truncate">{clip.name}</p>
-                        <div className="flex items-center gap-2 mt-1">
-                          <span className="text-[10px] text-slate-400">Durasi:</span>
-                          <input
-                            type="number"
-                            step="0.5"
-                            min="1"
-                            max="15"
-                            value={customClipDurations[idx] || clipDuration}
-                            onChange={(e) => {
-                              const val = parseFloat(e.target.value) || 3;
-                              setCustomClipDurations((prev) => ({ ...prev, [idx]: val }));
+                  <div className="grid grid-cols-2 gap-2">
+                    {footages.map((clip, idx) => (
+                      <div
+                        key={clip.id}
+                        onClick={() => setSelectedClipIndex(idx)}
+                        className={`rounded-xl overflow-hidden border bg-[#09090b] relative group cursor-pointer transition-all ${
+                          selectedClipIndex === idx ? "border-indigo-500 ring-2 ring-indigo-500/50" : "border-[#27272a] hover:border-slate-500"
+                        }`}
+                      >
+                        <div className="w-full aspect-video bg-black relative overflow-hidden">
+                          <video src={clip.previewUrl} className="w-full h-full object-cover" />
+                          <div className="absolute top-1.5 right-1.5 w-4 h-4 rounded bg-black/60 border border-white/40 flex items-center justify-center">
+                            {selectedClipIndex === idx && <Check className="w-3 h-3 text-white" />}
+                          </div>
+                        </div>
+                        <div className="p-2 flex items-center justify-between">
+                          <p className="text-[10px] font-bold text-slate-200 truncate">{clip.name}</p>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              removeFootage(clip.id);
                             }}
-                            className="w-12 text-[10px] px-1.5 py-0.5 rounded border border-slate-700 bg-slate-900 text-center font-bold"
-                          />
-                          <span className="text-[10px] text-slate-400">s</span>
+                            className="text-rose-400 hover:text-rose-300 p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
                         </div>
                       </div>
-
-                      <button onClick={(e) => { e.stopPropagation(); removeFootage(clip.id); }} className="text-rose-400 hover:text-rose-300 p-1.5 rounded-lg hover:bg-rose-950/30 cursor-pointer">
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))
+                    ))}
+                  </div>
                 )}
               </div>
-            </div>
-          )}
+            )}
 
-          {/* TAB 2: SCRIPT & VOICE OVER */}
-          {activeTab === "script" && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h2 className="text-xs font-bold flex items-center gap-2">
-                  <Type className="w-4 h-4 text-indigo-400" /> Script & Voice Over AI
-                </h2>
-                <button onClick={handlePolishScript} disabled={isPolishing} className="px-2.5 py-1 text-[10px] font-bold bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg flex items-center gap-1 cursor-pointer">
-                  {isPolishing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3 text-purple-300" />} Polish AI
-                </button>
-              </div>
-
-              {/* VOICE PILLS SELECTOR */}
-              <div className="space-y-1.5">
-                <span className="text-[10px] font-bold text-slate-400">Pilih Karakter Suara AI:</span>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {[
-                    { id: "Zephyr", label: "👩 Zephyr", desc: "Smooth" },
-                    { id: "Puck", label: "👨 Puck", desc: "Santai" },
-                    { id: "Charon", label: "🧔 Charon", desc: "Wibawa" },
-                    { id: "Kore", label: "👧 Kore", desc: "Jernih" },
-                    { id: "Fenrir", label: "🦁 Fenrir", desc: "Enerjik" },
-                    { id: "Aoede", label: "🎭 Aoede", desc: "Warm" },
-                  ].map((v) => (
-                    <button
-                      key={v.id}
-                      type="button"
-                      onClick={() => setSelectedVoice(v.id)}
-                      className={`px-2 py-1.5 rounded-xl text-[10px] font-bold border transition-all cursor-pointer text-left ${
-                        selectedVoice === v.id ? "bg-indigo-600 border-indigo-400 text-white shadow-md shadow-indigo-600/30" : `${inputClass} opacity-70 hover:opacity-100`
-                      }`}
-                    >
-                      <div className="truncate">{v.label}</div>
-                      <div className="text-[8px] font-normal opacity-80">{v.desc}</div>
-                    </button>
-                  ))}
+            {/* TAB: SCRIPT & VOICE */}
+            {(activeNavTab === "generate" || activeNavTab === "text") && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-300">Script & Voice Over AI</span>
+                  <button onClick={handlePolishScript} disabled={isPolishing} className="px-2 py-1 text-[9px] bg-indigo-600 hover:bg-indigo-500 text-white rounded font-bold">
+                    {isPolishing ? "Polishing..." : "Polish AI"}
+                  </button>
                 </div>
-              </div>
-
-              <textarea
-                rows={5}
-                placeholder="Masukkan naskah promosi Anda di sini..."
-                value={rawScript}
-                onChange={(e) => setRawScript(e.target.value)}
-                className={`w-full text-xs p-3 rounded-xl resize-none ${inputClass}`}
-              />
-
-              {polishedScript && (
-                <div className="p-3 rounded-xl text-xs border border-indigo-500/30 bg-indigo-950/20 text-indigo-200 space-y-1">
-                  <div className="flex justify-between font-bold text-[10px] text-indigo-400">
-                    <span>Hasil Polish AI:</span>
-                    <button onClick={() => setRawScript(polishedScript)} className="hover:underline cursor-pointer">Gunakan</button>
-                  </div>
-                  <p className="text-[11px] leading-relaxed">{polishedScript}</p>
-                </div>
-              )}
-
-              <button
-                onClick={handleGenerateAudio}
-                disabled={isGeneratingAudio}
-                className="w-full py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-indigo-600/30 disabled:opacity-50"
-              >
-                {isGeneratingAudio ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mic className="w-4 h-4 text-amber-300" />}
-                <span>Generate Voice Over ({selectedVoice})</span>
-              </button>
-
-              {audioUrl && (
-                <div className={`p-3 rounded-xl border space-y-1.5 ${inputClass}`}>
-                  <div className="flex items-center justify-between text-xs font-bold">
-                    <span className="text-emerald-400 flex items-center gap-1 text-[10px]"><CheckCircle2 className="w-3.5 h-3.5" /> Voice Over Tersimpan</span>
-                  </div>
-                  <audio src={audioUrl} controls className="w-full h-8" />
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* TAB 3: SMART TRANSITIONS CARD LIBRARY (DRAG & DROP / PLAYHEAD APPLY) */}
-          {activeTab === "transitions" && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h2 className="text-xs font-bold flex items-center gap-2">
-                  <Layers className="w-4 h-4 text-indigo-400" /> Library Transisi Sinematik
-                </h2>
-              </div>
-
-              <div className="p-2.5 rounded-xl border border-indigo-500/20 bg-indigo-950/20 text-[10px] text-indigo-300 leading-relaxed">
-                💡 Klik kartu transisi untuk langsung memasangnya pada **jarum playhead (merah)** atau pasang ke semua klip sekaligus!
-              </div>
-
-              {/* TRANSITIONS CARDS GRID */}
-              <div className="grid grid-cols-1 gap-2">
-                {AVAILABLE_TRANSITIONS.map((t) => (
-                  <div
-                    key={t.id}
-                    className={`p-3 rounded-xl border flex items-center justify-between gap-2 transition-all cursor-pointer ${inputClass} hover:border-indigo-500 hover:scale-[1.01]`}
-                  >
-                    <div>
-                      <h4 className="text-xs font-bold text-slate-100">{t.title}</h4>
-                      <p className="text-[9px] text-slate-400 mt-0.5">{t.desc}</p>
-                    </div>
-
-                    <div className="flex gap-1">
-                      <button
-                        onClick={() => applyTransitionToPlayhead(t.id)}
-                        className="px-2 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-[9px] font-bold cursor-pointer shadow-sm"
-                        title="Pasang di Jarum Playhead Terdekat"
-                      >
-                        + Jarum
-                      </button>
-                      <button
-                        onClick={() => applyTransitionToAllClips(t.id)}
-                        className="px-2 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-[9px] font-bold cursor-pointer shadow-sm"
-                        title="Pasang ke Semua Klip"
-                      >
-                        + Semua
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* TAB 4: AUDIO BGM */}
-          {activeTab === "bgm" && (
-            <div className="space-y-4">
-              <h2 className="text-xs font-bold flex items-center gap-2">
-                <Music className="w-4 h-4 text-indigo-400" /> Background Music (BGM)
-              </h2>
-
-              <button
-                onClick={handleAutoBgm}
-                disabled={isSelectingBgm}
-                className="w-full py-2.5 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 rounded-xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer"
-              >
-                {isSelectingBgm ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkle className="w-4 h-4 text-amber-400" />}
-                <span>Pilih BGM Otomatis AI</span>
-              </button>
-
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-bold text-slate-400">Atur Volume Musik BGM:</label>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.05"
-                    value={bgmVolume}
-                    onChange={(e) => setBgmVolume(parseFloat(e.target.value))}
-                    className="flex-1 accent-indigo-500 cursor-pointer"
-                  />
-                  <span className="text-xs font-bold w-10 text-right">{Math.round(bgmVolume * 100)}%</span>
-                </div>
-              </div>
-
-              {bgmUrl && <audio src={bgmUrl} controls className="w-full h-8" />}
-            </div>
-          )}
-
-          {/* TAB 5: BOLD COLOR FILTERS & SUBTITLE STYLE */}
-          {activeTab === "style" && (
-            <div className="space-y-4">
-              <h2 className="text-xs font-bold flex items-center gap-2">
-                <Sliders className="w-4 h-4 text-indigo-400" /> Bold Color Filters & Subtitles
-              </h2>
-
-              <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Filter Pewarnaan Visual (Color Grading):</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {[
-                    { id: "fast-viral", name: "🔥 Fast Viral", desc: "Vibrant Pop" },
-                    { id: "cinematic-aesthetic", name: "🎬 Filmic Teal & Orange", desc: "Deep Film" },
-                    { id: "moody-lowsat", name: "🖤 Moody Low-Sat", desc: "Low Saturation" },
-                    { id: "vintage-gold", name: "🌇 Vintage Warm Gold", desc: "Golden Hour" },
-                    { id: "brand-commercial", name: "💼 Commercial Clean", desc: "High Clarity" },
-                    { id: "soft-sweet", name: "🌸 Soft Sweet", desc: "Pastel Dream" },
-                  ].map((preset) => (
-                    <button
-                      key={preset.id}
-                      onClick={() => setEditingStyle(preset.id)}
-                      className={`p-2.5 rounded-xl border text-xs font-bold text-left transition-all cursor-pointer ${
-                        editingStyle === preset.id ? "bg-indigo-600 border-indigo-400 text-white shadow-md shadow-indigo-600/30" : `${inputClass} opacity-70 hover:opacity-100`
-                      }`}
-                    >
-                      <div className="truncate">{preset.name}</div>
-                      <div className="text-[8px] font-normal opacity-75 mt-0.5">{preset.desc}</div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="space-y-2 pt-2">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Gaya Teks Subtitle (Caption):</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {[
-                    { id: "plain-shadow", name: "✨ Plain Shadow" },
-                    { id: "yellow", name: "🟨 Yellow Box" },
-                    { id: "neon", name: "🟦 Neon Glow" },
-                    { id: "box", name: "⬛ Dark Box" },
-                  ].map((sub) => (
-                    <button
-                      key={sub.id}
-                      onClick={() => setSubtitleStyle(sub.id)}
-                      className={`p-2.5 rounded-xl border text-xs font-bold text-left transition-all cursor-pointer ${
-                        subtitleStyle === sub.id ? "bg-indigo-600 border-indigo-400 text-white shadow-md shadow-indigo-600/30" : `${inputClass} opacity-70 hover:opacity-100`
-                      }`}
-                    >
-                      {sub.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* TAB 6: AI COPILOT */}
-          {activeTab === "copilot" && (
-            <div className="space-y-3 flex flex-col h-full">
-              <h2 className="text-xs font-bold flex items-center gap-2">
-                <Bot className="w-4 h-4 text-indigo-400" /> AI Copilot Studio Assistant
-              </h2>
-              <div className="flex-1 border rounded-xl p-3 overflow-y-auto space-y-2.5 text-xs bg-black/40 border-slate-800">
-                {copilotMessages.map((msg, idx) => (
-                  <div key={idx} className={`p-2.5 rounded-xl ${msg.role === "assistant" ? "bg-indigo-950/40 text-indigo-200 border border-indigo-500/20" : "bg-slate-800 text-slate-100 ml-4"}`}>
-                    {msg.text}
-                  </div>
-                ))}
-              </div>
-              <div className="flex gap-1.5">
-                <input
-                  type="text"
-                  placeholder="Tanyakan rekomendasi gaya..."
-                  value={copilotInput}
-                  onChange={(e) => setCopilotInput(e.target.value)}
-                  className={`flex-1 text-xs p-2.5 rounded-xl ${inputClass}`}
+                <textarea
+                  rows={4}
+                  placeholder="Masukkan naskah video Anda di sini..."
+                  value={rawScript}
+                  onChange={(e) => setRawScript(e.target.value)}
+                  className="w-full text-xs p-2.5 rounded-xl bg-[#09090b] border border-[#27272a] text-slate-100 resize-none"
                 />
                 <button
-                  onClick={async () => {
-                    if (!copilotInput.trim()) return;
-                    const txt = copilotInput;
-                    setCopilotInput("");
-                    setCopilotMessages((prev) => [...prev, { role: "user", text: txt }]);
-                    setIsCopilotThinking(true);
-                    try {
-                      const res = await fetch("/api/ai-copilot", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ prompt: txt }),
-                      });
-                      const data = await res.json();
-                      setCopilotMessages((prev) => [...prev, { role: "assistant", text: data.reply || data.message || "Saya siap membantu memodifikasi video Anda!" }]);
-                    } catch (e: any) {
-                      setCopilotMessages((prev) => [...prev, { role: "assistant", text: "Maaf, terjadi kesalahan koneksi." }]);
-                    } finally {
-                      setIsCopilotThinking(false);
-                    }
-                  }}
-                  className="px-3 py-2 bg-indigo-600 text-white rounded-xl font-bold cursor-pointer text-xs"
+                  onClick={handleGenerateAudio}
+                  disabled={isGeneratingAudio}
+                  className="w-full py-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-xl text-xs font-bold"
                 >
-                  Kirim
+                  {isGeneratingAudio ? "Membuat Suara AI..." : `Generate Voice Over (${selectedVoice})`}
                 </button>
               </div>
-            </div>
-          )}
+            )}
+
+            {/* TAB: EFFECTS & TRANSITIONS */}
+            {activeNavTab === "effects" && (
+              <div className="space-y-3">
+                <span className="text-xs font-bold text-slate-300">Library Transisi Sinematik</span>
+                <div className="space-y-1.5">
+                  {AVAILABLE_TRANSITIONS.map((t) => (
+                    <div key={t.id} className="p-2 rounded-xl bg-[#09090b] border border-[#27272a] flex items-center justify-between text-xs">
+                      <div>
+                        <p className="font-bold text-slate-200">{t.title}</p>
+                        <p className="text-[9px] text-slate-400">{t.desc}</p>
+                      </div>
+                      <button onClick={() => applyTransitionToPlayhead(t.id)} className="px-2 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-[9px] font-bold">
+                        + Jarum
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* CENTER PROGRAM MONITOR (REMOTION PLAYER CANVAS) */}
-        <div className="flex-1 flex flex-col p-4 gap-4 overflow-hidden relative">
-          <div className="flex-1 flex items-center justify-center relative overflow-hidden">
-            <div className="w-[340px] h-[600px] max-h-full aspect-[9/16] relative flex items-center justify-center">
-              <RemotionPlayerWrapper props={remotionCompositionProps} durationInFrames={totalFrames} />
+        {/* 3. RIGHT PROGRAM MONITOR CANVAS (EXACT CAPCUT LAYOUT) */}
+        <div className="flex-1 bg-[#121215] flex flex-col justify-between p-4 overflow-hidden relative">
+          {/* ASPECT RATIO SELECTOR TOP BAR */}
+          <div className="flex items-center justify-end gap-2 z-20">
+            <div className="flex items-center gap-1 bg-[#18181c] border border-[#27272a] rounded-lg px-2.5 py-1 text-xs font-bold">
+              <span className="text-slate-400">Aspect Ratio:</span>
+              <select
+                value={aspectRatio}
+                onChange={(e) => setAspectRatio(e.target.value as any)}
+                className="bg-transparent text-white font-bold outline-none cursor-pointer"
+              >
+                <option value="9:16">9:16 Vertical (Shorts/Reels)</option>
+                <option value="16:9">16:9 Landscape</option>
+                <option value="1:1">1:1 Square</option>
+              </select>
+            </div>
+            <button
+              onClick={handleExportVideo}
+              disabled={isExporting}
+              className="px-4 py-1.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-lg text-xs font-bold shadow-md cursor-pointer"
+            >
+              Export MP4
+            </button>
+          </div>
+
+          {/* MAIN CENTER DISPLAY CANVAS */}
+          <div className="flex-1 flex items-center justify-center relative overflow-hidden my-2">
+            <div
+              className={`max-h-full relative flex items-center justify-center shadow-2xl rounded-2xl overflow-hidden border border-[#27272a] bg-black ${
+                aspectRatio === "9:16" ? "w-[330px] h-[580px] aspect-[9/16]" : aspectRatio === "16:9" ? "w-[600px] h-[337px] aspect-[16/9]" : "w-[400px] h-[400px] aspect-square"
+              }`}
+            >
+              <RemotionPlayerWrapper
+                props={remotionCompositionProps}
+                durationInFrames={totalFrames}
+                onFrameUpdate={handlePlayerFrameUpdate}
+                seekToSec={seekToSec}
+              />
             </div>
           </div>
 
-          {/* BOTTOM MULTI-TRACK STUDIO TIMELINE (CAPCUT STYLE WITH THUMBNAILS, SCRUBBER PLAYHEAD & SPLIT CUT) */}
-          <div className={`h-52 border rounded-2xl p-3 flex flex-col gap-2.5 overflow-hidden ${panelClass}`}>
-            {/* TIMELINE TOOLBAR & RULER HEADER */}
-            <div className="flex items-center justify-between border-b pb-2 border-slate-800 text-[10px] text-slate-400 font-extrabold">
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={handleSplitClipAtPlayhead}
-                  className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded-lg flex items-center gap-1.5 text-[10px] font-extrabold cursor-pointer shadow-md shadow-rose-600/30"
-                  title="Potong Klip di Posisi Jarum Merah"
-                >
-                  <Scissors className="w-3.5 h-3.5" />
-                  <span>SPLIT CUT (GUNTING)</span>
-                </button>
-                <div className="flex items-center gap-1.5 font-mono text-indigo-400">
-                  <Clock className="w-3.5 h-3.5" />
-                  <span>JARUM PLAYHEAD: {formatTimecode(currentTimeSec)}</span>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-3 font-mono">
-                <span>TOTAL: {totalVideoDurationSec.toFixed(1)}s</span>
-                <span className="px-1.5 py-0.5 rounded bg-indigo-600/30 text-indigo-300">60 FPS</span>
-              </div>
+          {/* BOTTOM PLAYER CONTROL BAR */}
+          <div className="h-10 bg-[#18181c] border border-[#27272a] rounded-xl px-4 flex items-center justify-between text-xs font-bold text-slate-300">
+            <div className="flex items-center gap-3">
+              <Volume2 className="w-4 h-4 text-slate-400 cursor-pointer hover:text-white" />
+              <span className="font-mono text-slate-200">
+                {formatTimecode(currentTimeSec)} / {formatTimecode(totalVideoDurationSec)}
+              </span>
             </div>
 
-            {/* SPACIOUS TIMELINE TRACKS CONTAINER WITH RED PLAYHEAD SCRUBBER */}
-            <div
-              ref={timelineRulerRef}
-              onClick={(e) => {
-                if (!timelineRulerRef.current) return;
-                const rect = timelineRulerRef.current.getBoundingClientRect();
-                const clickX = e.clientX - rect.left - 70; // Adjust for track label width
-                const trackWidth = rect.width - 70;
-                if (trackWidth > 0) {
-                  const clickedTime = Math.max(0, Math.min(totalVideoDurationSec, (clickX / trackWidth) * totalVideoDurationSec));
-                  setCurrentTimeSec(parseFloat(clickedTime.toFixed(2)));
-                }
-              }}
-              className="flex-1 overflow-x-auto space-y-2 text-[10px] font-bold relative cursor-pointer"
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">LIVE SYNC READY</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* 4. BOTTOM FULL-WIDTH MULTI-TRACK TIMELINE (EXACT CAPCUT MATCH SPANNING CENTER & RIGHT) */}
+      <div className="h-56 bg-[#18181c] border-t border-[#27272a] flex flex-col overflow-hidden z-30">
+        {/* TIMELINE RULER TOP BAR WITH PLAYHEAD PIN (00:04) */}
+        <div
+          ref={timelineRulerRef}
+          onClick={(e) => {
+            if (!timelineRulerRef.current) return;
+            const rect = timelineRulerRef.current.getBoundingClientRect();
+            const clickX = e.clientX - rect.left - 90; // Adjust for track label width
+            const trackWidth = rect.width - 90;
+            if (trackWidth > 0) {
+              const clickedTime = Math.max(0, Math.min(totalVideoDurationSec, (clickX / trackWidth) * totalVideoDurationSec));
+              setSeekToSec(parseFloat(clickedTime.toFixed(2)));
+              setCurrentTimeSec(parseFloat(clickedTime.toFixed(2)));
+            }
+          }}
+          className="h-9 bg-[#121215] border-b border-[#27272a] px-3 flex items-center relative select-none cursor-pointer overflow-hidden"
+        >
+          {/* TRACK LABELS OFFSET PADDING */}
+          <div className="w-[90px] text-[10px] font-extrabold text-slate-400 flex items-center gap-1.5">
+            <button
+              onClick={(e) => { e.stopPropagation(); handleSplitClipAtPlayhead(); }}
+              className="p-1 rounded hover:bg-[#27272a] text-rose-400 hover:text-rose-300 cursor-pointer"
+              title="Split Cut (Gunting)"
             >
-              {/* RED INTERACTIVE PLAYHEAD SCRUBBER LINE */}
-              <div
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  bottom: 0,
-                  left: `calc(70px + ${(currentTimeSec / Math.max(0.1, totalVideoDurationSec)) * 90}%)`,
-                  width: "2px",
-                  backgroundColor: "#ef4444",
-                  boxShadow: "0 0 10px rgba(239, 68, 68, 0.9)",
-                  zIndex: 40,
-                  pointerEvents: "none",
-                }}
-              >
-                <div className="w-3 h-3 rounded-full bg-rose-500 -translate-x-[5px] -translate-y-1 shadow-md border border-white" />
-              </div>
+              <Scissors className="w-3.5 h-3.5" />
+            </button>
+            <span>SPLIT</span>
+          </div>
 
-              {/* TRACK 1: V1 VIDEO FOOTAGES (WITH THUMBNAILS & TRANSITION BADGES) */}
-              <div className="flex items-center gap-2">
-                <span className="w-16 text-indigo-400 flex items-center gap-1 text-[9px] font-extrabold"><VideoIcon className="w-3.5 h-3.5" /> V1 Video</span>
-                <div className="flex-1 flex items-center gap-1.5 h-12">
-                  {footages.length === 0 ? (
-                    <div className="h-10 flex-1 bg-slate-900/60 rounded-xl border border-dashed border-slate-800 flex items-center justify-center text-slate-600 italic">Belum ada klip video</div>
-                  ) : (
-                    footages.map((clip, idx) => (
-                      <React.Fragment key={clip.id}>
-                        <div
-                          onClick={(e) => { e.stopPropagation(); setSelectedClipIndex(idx); }}
-                          className={`h-12 px-2 rounded-xl flex items-center gap-2 text-indigo-200 border transition-all cursor-pointer ${
-                            selectedClipIndex === idx ? "border-indigo-400 bg-indigo-900/90 shadow-lg shadow-indigo-600/30 scale-[1.02]" : "border-indigo-500/30 bg-gradient-to-r from-indigo-950/80 to-purple-950/80 hover:border-indigo-400"
-                          }`}
-                        >
-                          <div className="w-8 h-10 rounded bg-black overflow-hidden flex-shrink-0 border border-slate-800">
-                            <video src={clip.previewUrl} className="w-full h-full object-cover" />
-                          </div>
-                          <span className="truncate max-w-[80px]">#{idx + 1} {clip.name}</span>
-                          <span className="text-[9px] opacity-80 font-mono">({customClipDurations[idx] || clipDuration}s)</span>
-                        </div>
+          {/* TIMELINE RULER MARKS (00:00, 00:04, 00:10, 00:20, 00:30, etc.) */}
+          <div className="flex-1 flex justify-between text-[10px] font-mono text-slate-500 font-bold pr-6">
+            <span>00:00</span>
+            <span>00:04</span>
+            <span>00:10</span>
+            <span>00:20</span>
+            <span>00:30</span>
+            <span>00:40</span>
+            <span>00:50</span>
+            <span>01:00</span>
+            <span>01:10</span>
+            <span>01:20</span>
+          </div>
 
-                        {idx < footages.length - 1 && (
-                          <div
-                            onClick={(e) => { e.stopPropagation(); setActiveTab("transitions"); }}
-                            className="h-7 px-2 bg-amber-500/20 hover:bg-amber-500/40 border border-amber-500/50 rounded-lg text-amber-300 text-[9px] font-extrabold flex items-center gap-1 cursor-pointer transition-all shadow-sm"
-                            title={`Transisi: ${transitionsMap[idx] || "light-leak"}`}
-                          >
-                            <Zap className="w-3 h-3 text-amber-400" />
-                            <span>{transitionsMap[idx] || "light-leak"}</span>
-                          </div>
-                        )}
-                      </React.Fragment>
-                    ))
-                  )}
-                </div>
-              </div>
+          {/* ACTIVE WHITE PLAYHEAD PIN BADGE (00:04) & VERTICAL LINE DROP DOWN */}
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              bottom: "-200px",
+              left: `calc(90px + ${(currentTimeSec / Math.max(0.1, totalVideoDurationSec)) * 88}%)`,
+              width: "2px",
+              backgroundColor: "#ffffff",
+              boxShadow: "0 0 12px rgba(255, 255, 255, 0.9)",
+              zIndex: 50,
+              pointerEvents: "none",
+            }}
+          >
+            <div className="w-12 h-5 rounded-full bg-white text-black font-mono font-extrabold text-[9px] flex items-center justify-center -translate-x-1/2 shadow-lg border border-slate-300">
+              {formatTimecode(currentTimeSec)}
+            </div>
+          </div>
+        </div>
 
-              {/* TRACK 2: A1 VOICE OVER TRACK */}
-              <div className="flex items-center gap-2">
-                <span className="w-16 text-amber-400 flex items-center gap-1 text-[9px] font-extrabold"><Mic className="w-3.5 h-3.5" /> A1 Voice</span>
-                <div className="flex-1">
-                  {audioUrl ? (
-                    <div className="h-7 bg-gradient-to-r from-amber-950/80 to-amber-900/80 border border-amber-500/40 rounded-xl flex items-center px-3 text-amber-200 gap-2 font-bold">
-                      <Mic className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Voice Over AI ({selectedVoice})</span>
+        {/* TIMELINE LAYERS CONTAINER */}
+        <div className="flex-1 p-3 overflow-x-auto space-y-2 text-xs select-none">
+          {/* LAYER 1: V1 VIDEO TRACK FILMSTRIP */}
+          <div className="flex items-center gap-3">
+            <span className="w-20 text-[10px] font-extrabold text-slate-400">Layer 1</span>
+            <div className="flex-1 flex items-center gap-1 h-14 bg-[#09090b] rounded-xl border border-[#27272a] p-1 overflow-hidden">
+              {footages.length === 0 ? (
+                <div className="w-full text-[10px] text-slate-600 italic text-center">Belum ada klip video di Layer 1</div>
+              ) : (
+                footages.map((clip, idx) => (
+                  <React.Fragment key={clip.id}>
+                    <div
+                      onClick={() => setSelectedClipIndex(idx)}
+                      className={`h-full px-2 rounded-lg bg-slate-800 border flex items-center gap-2 transition-all cursor-pointer min-w-[120px] ${
+                        selectedClipIndex === idx ? "border-indigo-500 bg-indigo-950/80" : "border-[#27272a] hover:border-slate-500"
+                      }`}
+                    >
+                      <div className="w-8 h-10 rounded bg-black overflow-hidden flex-shrink-0">
+                        <video src={clip.previewUrl} className="w-full h-full object-cover" />
+                      </div>
+                      <span className="text-[10px] font-bold text-slate-200 truncate">{clip.name}</span>
                     </div>
-                  ) : (
-                    <div className="h-7 bg-slate-900/40 rounded-xl border border-dashed border-slate-800 flex items-center px-3 text-slate-600 italic text-[9px]">Tidak ada Voice Over</div>
-                  )}
-                </div>
-              </div>
 
-              {/* TRACK 3: A2 BGM AUDIO TRACK */}
-              <div className="flex items-center gap-2">
-                <span className="w-16 text-emerald-400 flex items-center gap-1 text-[9px] font-extrabold"><Music className="w-3.5 h-3.5" /> A2 BGM</span>
-                <div className="flex-1">
-                  {bgmUrl ? (
-                    <div className="h-7 bg-gradient-to-r from-emerald-950/80 to-teal-900/80 border border-emerald-500/40 rounded-xl flex items-center px-3 text-emerald-200 gap-2 font-bold">
-                      <Music className="w-3.5 h-3.5 text-emerald-400" />
-                      <span>Background Music ({Math.round(bgmVolume * 100)}%)</span>
-                    </div>
-                  ) : (
-                    <div className="h-7 bg-slate-900/40 rounded-xl border border-dashed border-slate-800 flex items-center px-3 text-slate-600 italic text-[9px]">Tanpa Musik BGM</div>
-                  )}
-                </div>
-              </div>
+                    {idx < footages.length - 1 && (
+                      <div
+                        onClick={() => applyTransitionToPlayhead("light-leak")}
+                        className="px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[8px] font-extrabold cursor-pointer"
+                      >
+                        ⚡ {transitionsMap[idx] || "light-leak"}
+                      </div>
+                    )}
+                  </React.Fragment>
+                ))
+              )}
+            </div>
+          </div>
 
-              {/* TRACK 4: T1 SUBTITLES CAPTIONS TRACK */}
-              <div className="flex items-center gap-2">
-                <span className="w-16 text-purple-400 flex items-center gap-1 text-[9px] font-extrabold"><Type className="w-3.5 h-3.5" /> T1 Captions</span>
-                <div className="flex-1">
-                  {textChunks.length > 0 ? (
-                    <div className="h-7 bg-gradient-to-r from-purple-950/80 to-pink-950/80 border border-purple-500/40 rounded-xl flex items-center px-3 text-purple-200 gap-2 font-bold truncate">
-                      <Type className="w-3.5 h-3.5 text-purple-400" />
-                      <span className="truncate">{textChunks.length} Subtitle Captions ({subtitleStyle})</span>
-                    </div>
-                  ) : (
-                    <div className="h-7 bg-slate-900/40 rounded-xl border border-dashed border-slate-800 flex items-center px-3 text-slate-600 italic text-[9px]">Tidak ada Teks Captions</div>
-                  )}
-                </div>
-              </div>
+          {/* LAYER 2: A1 AUDIO WAVEFORM TRACK (RED/ORANGE TRACK) */}
+          <div className="flex items-center gap-3">
+            <span className="w-20 text-[10px] font-extrabold text-slate-400">Layer 2</span>
+            <div className="flex-1 h-8 bg-gradient-to-r from-rose-900/80 via-amber-900/80 to-rose-900/80 rounded-xl border border-rose-500/40 px-3 flex items-center text-rose-200 text-[10px] font-extrabold">
+              <Music className="w-3.5 h-3.5 text-rose-400 mr-2" />
+              <span>Voice Over AI ({selectedVoice}) + BGM Track</span>
+            </div>
+          </div>
+
+          {/* LAYER 3: T1 CAPTIONS TRACK (PURPLE PILL BLOCKS) */}
+          <div className="flex items-center gap-3">
+            <span className="w-20 text-[10px] font-extrabold text-slate-400">Layer 3</span>
+            <div className="flex-1 flex items-center gap-2 h-8">
+              {textChunks.length > 0 ? (
+                textChunks.map((chunk, i) => (
+                  <div key={i} className="h-7 px-3 bg-purple-900/80 border border-purple-500/40 text-purple-200 rounded-lg text-[9px] font-extrabold flex items-center gap-1 truncate">
+                    <span>cc</span>
+                    <span className="truncate">{chunk}</span>
+                  </div>
+                ))
+              ) : (
+                <div className="w-full text-[10px] text-slate-600 italic text-center">Belum ada Subtitle Captions di Layer 3</div>
+              )}
             </div>
           </div>
         </div>
@@ -964,7 +736,7 @@ export default function AutoVideoEditorStudio() {
       {/* RENDER EXPORT PROGRESS MODAL */}
       {isExporting && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <div className={`w-96 p-6 rounded-2xl border text-center space-y-4 shadow-2xl ${panelClass}`}>
+          <div className="w-96 p-6 rounded-2xl border border-[#27272a] bg-[#18181c] text-center space-y-4 shadow-2xl">
             <div className="w-12 h-12 rounded-2xl bg-indigo-600/20 text-indigo-400 mx-auto flex items-center justify-center animate-bounce">
               <Film className="w-6 h-6" />
             </div>
@@ -983,7 +755,7 @@ export default function AutoVideoEditorStudio() {
       {/* EXPORTED VIDEO RESULT MODAL */}
       {exportedVideoUrl && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <div className={`w-[380px] p-5 rounded-2xl border space-y-4 shadow-2xl ${panelClass}`}>
+          <div className="w-[380px] p-5 rounded-2xl border border-[#27272a] bg-[#18181c] space-y-4 shadow-2xl">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-bold flex items-center gap-2 text-emerald-400">
                 <CheckCircle2 className="w-4 h-4" /> Video Berhasil Diekspor!
