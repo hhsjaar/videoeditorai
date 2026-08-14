@@ -785,23 +785,24 @@ export default function CapCutWebStudio() {
 
         {/* SPACIOUS TIMELINE LAYERS CONTAINER */}
         <div className="flex-1 p-3 overflow-x-auto space-y-3 text-xs select-none z-10">
-          {/* LAYER 1: V1 VIDEO TRACK FILMSTRIP (PROPORTIONAL CLIP WIDTHS) */}
-          <div className="flex items-center gap-3">
+          {/* LAYER 1: V1 VIDEO TRACK FILMSTRIP (PROPORTIONAL CLIP WIDTHS + ABSOLUTE TRANSITION BADGES) */}
+          <div className="flex items-center gap-3 relative">
             <span className="w-20 text-[10px] font-extrabold text-slate-400">Layer 1 (V1)</span>
-            <div className="flex-1 flex items-center gap-1.5 h-16 bg-[#09090b] rounded-xl border border-[#27272a] p-1.5 overflow-hidden">
+            <div className="flex-1 flex items-center h-16 bg-[#09090b] rounded-xl border border-[#27272a] p-1.5 overflow-hidden relative">
               {footages.length === 0 ? (
                 <div className="w-full text-[10px] text-slate-600 italic text-center">Belum ada klip video di Layer 1</div>
               ) : (
-                footages.map((clip, idx) => {
-                  const clipDur = customClipDurations[idx] || clipDuration;
-                  const clipPercent = (clipDur / Math.max(0.1, totalVideoDurationSec)) * 100;
+                <>
+                  {footages.map((clip, idx) => {
+                    const clipDur = customClipDurations[idx] || clipDuration;
+                    const clipPercent = (clipDur / Math.max(0.1, totalVideoDurationSec)) * 100;
 
-                  return (
-                    <React.Fragment key={clip.id}>
+                    return (
                       <div
+                        key={clip.id}
                         onClick={() => setSelectedClipIndex(idx)}
-                        style={{ width: `calc(${clipPercent}% - 8px)` }}
-                        className={`h-full px-2 rounded-xl flex items-center gap-2 text-indigo-200 border transition-all cursor-pointer flex-shrink-0 min-w-[90px] ${
+                        style={{ width: `${clipPercent}%` }}
+                        className={`h-full px-2 rounded-xl flex items-center gap-2 text-indigo-200 border transition-all cursor-pointer flex-shrink-0 min-w-[70px] ${
                           selectedClipIndex === idx ? "border-indigo-400 bg-indigo-900/90 shadow-lg shadow-indigo-600/30 scale-[1.01]" : "border-indigo-500/30 bg-gradient-to-r from-indigo-950/80 to-purple-950/80 hover:border-indigo-400"
                         }`}
                       >
@@ -813,18 +814,31 @@ export default function CapCutWebStudio() {
                           <p className="text-[8px] text-indigo-300 opacity-80 font-mono">{clipDur}s</p>
                         </div>
                       </div>
+                    );
+                  })}
 
-                      {idx < footages.length - 1 && (
+                  {/* ABSOLUTE TRANSITION BADGES OVERLAID EXACTLY ON CLIP SEAMS */}
+                  {(() => {
+                    let accPercent = 0;
+                    return footages.map((_, idx) => {
+                      if (idx >= footages.length - 1) return null;
+                      const clipDur = customClipDurations[idx] || clipDuration;
+                      accPercent += (clipDur / Math.max(0.1, totalVideoDurationSec)) * 100;
+
+                      return (
                         <div
-                          onClick={() => applyTransitionToPlayhead("light-leak")}
-                          className="px-2 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/40 border border-amber-500/50 text-amber-300 text-[9px] font-extrabold cursor-pointer flex-shrink-0"
+                          key={`trans_${idx}`}
+                          onClick={(e) => { e.stopPropagation(); applyTransitionToPlayhead("light-leak"); }}
+                          style={{ left: `${accPercent}%` }}
+                          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 px-2 py-1 rounded-lg bg-amber-500/90 hover:bg-amber-400 text-black text-[9px] font-extrabold cursor-pointer z-30 shadow-lg border border-white/60 flex items-center gap-1"
+                          title="Transition Badge (Click to Edit)"
                         >
                           ⚡ {transitionsMap[idx] || "light-leak"}
                         </div>
-                      )}
-                    </React.Fragment>
-                  );
-                })
+                      );
+                    });
+                  })()}
+                </>
               )}
             </div>
           </div>
