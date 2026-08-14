@@ -28,17 +28,17 @@ export const OverlayTransitions: React.FC<OverlayTransitionsProps> = ({
   for (let i = 0; i < footages.length - 1; i++) {
     const durSec = footages[i]?.duration || defaultClipDuration || 3;
     accumulatedFrames += Math.round(durSec * fps);
-    const customT = transitions.find((t) => t.afterClipIndex === i);
+    const customT = transitions.find((t) => t.afterClipIndex === i) || transitions[i];
     boundaries.push({ clipIndex: i, frame: accumulatedFrames, transition: customT });
   }
 
   return (
     <div style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 30 }}>
       {boundaries.map(({ clipIndex, frame: boundaryFrame, transition }) => {
-        if (!transition) return null;
+        if (!transition || !transition.type) return null;
 
-        const tDurSec = transition.duration || 0.6;
-        const tDurFrames = Math.max(2, Math.round(tDurSec * fps));
+        const tDurSec = transition.duration || 0.8;
+        const tDurFrames = Math.max(10, Math.round(tDurSec * fps));
         const halfDur = Math.round(tDurFrames / 2);
         const startFrame = boundaryFrame - halfDur;
         const endFrame = boundaryFrame + halfDur;

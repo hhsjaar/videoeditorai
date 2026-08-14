@@ -34,10 +34,13 @@ import {
   Clock,
   LayoutGrid,
   Sparkle,
+  Copy,
+  Split,
+  Eye,
+  SlidersHorizontal,
 } from "lucide-react";
 import { MainCompositionProps, FootageItem, TransitionItem, SubtitleChunk } from "../remotion/types";
 
-// Dynamically import RemotionPlayerWrapper to prevent SSR window missing issues
 const RemotionPlayerWrapper = dynamic(
   () => import("../components/RemotionPlayerWrapper").then((m) => m.RemotionPlayerWrapper),
   { ssr: false, loading: () => <div className="w-full h-full flex items-center justify-center bg-slate-950 text-slate-400 text-xs font-bold animate-pulse">Loading Studio Player...</div> }
@@ -51,6 +54,21 @@ interface UploadedFootage {
   duration: number;
 }
 
+const AVAILABLE_TRANSITIONS = [
+  { id: "light-leak", title: "✨ Light Leak", desc: "Warm Golden Light Sweep", category: "Light & Flare" },
+  { id: "film-burn", title: "🔥 Film Burn", desc: "Retro Orange Burn Flare", category: "Light & Flare" },
+  { id: "passerby", title: "💫 Passerby", desc: "Anamorphic Streak Sweep", category: "Light & Flare" },
+  { id: "lens-flare", title: "🌌 Lens Flare", desc: "Cyan Radial Glow", category: "Light & Flare" },
+  { id: "flash-white", title: "⚡ Flash White", desc: "High-Energy Flash", category: "Flash" },
+  { id: "fade-black", title: "🎬 Fade Black", desc: "Dramatic Cinematic Fade", category: "Fade" },
+  { id: "zoom-blur", title: "🔍 Zoom Blur", desc: "Impact Scale & Motion Blur", category: "Motion" },
+  { id: "glitch", title: "🤖 Glitch", desc: "Cyber Scanlines RGB", category: "Cyber" },
+  { id: "iris-circle", title: "⭕ Iris Circle", desc: "Radial Circular Wipe", category: "Mask" },
+  { id: "wipe-horizontal", title: "↔️ Wipe Horizontal", desc: "Smooth Side Slide", category: "Wipe" },
+  { id: "wipe-diagonal", title: "↗️ Wipe Diagonal", desc: "Dynamic Polygon Slash", category: "Wipe" },
+  { id: "vignette", title: "🎭 Color Split", desc: "Vibrant Vignette Flare", category: "Color" },
+];
+
 export default function AutoVideoEditorStudio() {
   const [isDark, setIsDark] = useState(true);
   const [activeTab, setActiveTab] = useState<"media" | "script" | "transitions" | "bgm" | "style" | "copilot">("media");
@@ -59,6 +77,12 @@ export default function AutoVideoEditorStudio() {
   const [footages, setFootages] = useState<UploadedFootage[]>([]);
   const [clipDuration, setClipDuration] = useState<number>(3.0);
   const [customClipDurations, setCustomClipDurations] = useState<{ [key: number]: number }>({});
+  const [selectedClipIndex, setSelectedClipIndex] = useState<number | null>(null);
+
+  // Playhead & Scrubber state
+  const [currentTimeSec, setCurrentTimeSec] = useState<number>(0);
+  const [isScrubbing, setIsScrubbing] = useState<boolean>(false);
+  const timelineRulerRef = useRef<HTMLDivElement>(null);
 
   // Script & Voice state
   const [rawScript, setRawScript] = useState<string>("");
@@ -89,7 +113,7 @@ export default function AutoVideoEditorStudio() {
 
   // AI Copilot state
   const [copilotMessages, setCopilotMessages] = useState<Array<{ role: "user" | "assistant"; text: string }>>([
-    { role: "assistant", text: "Halo! Saya Copilot Studio AI Anda. Ada yang bisa saya bantu untuk meningkatkan kualitas video promo Anda hari ini?" },
+    { role: "assistant", text: "Halo! Saya Copilot Studio AI Anda. Ada yang bisa saya bantu untuk memodifikasi video atau memilih transisi sinematik hari ini?" },
   ]);
   const [copilotInput, setCopilotInput] = useState<string>("");
   const [isCopilotThinking, setIsCopilotThinking] = useState<boolean>(false);
@@ -110,6 +134,90 @@ export default function AutoVideoEditorStudio() {
 
   const removeFootage = (id: string) => {
     setFootages((prev) => prev.filter((f) => f.id !== id));
+  };
+
+  // Split Footage Cut (Gunting ✂️) at Playhead Position
+  const handleSplitClipAtPlayhead = () => {
+    if (footages.length === 0) return alert("Upload klip video terlebih dahulu!");
+
+    // Calculate which clip the playhead is currently inside
+    let acc = 0;
+    let targetIndex = -1;
+    let timeInsideClip = 0;
+
+    for (let i = 0; i < footages.length; i++) {
+      const dur = customClipDurations[i] || clipDuration;
+      if (currentTimeSec >= acc && currentTimeSec <= acc + dur) {
+        targetIndex = i;
+        timeInsideClip = currentTimeSec - acc;
+        break;
+      }
+      acc += dur;
+    }
+
+    if (targetIndex === -1 || timeInsideClip < 0.4) {
+      return alert("Posisikan jarum playhead (merah) di tengah klip yang ingin dipotong!");
+    }
+
+    const targetClip = footages[targetIndex];
+    const originalDur = customClipDurations[targetIndex] || clipDuration;
+    const part1Dur = Math.max(0.5, parseFloat(timeInsideClip.toFixed(1)));
+    const part2Dur = Math.max(0.5, parseFloat((originalDur - part1Dur).toFixed(1)));
+
+    const part2Clip: UploadedFootage = {
+      id: `${Date.now()}_split`,
+      file: targetClip.file,
+      previewUrl: targetClip.previewUrl,
+      name: `${targetClip.name} (Part 2)`,
+      duration: part2Dur,
+    };
+
+    // Update footages array and duration maps
+    const updatedFootages = [...footages];
+    updatedFootages.splice(targetIndex + 1, 0, part2Clip);
+
+    const newDurMap: { [key: number]: number } = {};
+    updatedFootages.forEach((_, idx) => {
+      if (idx < targetIndex) newDurMap[idx] = customClipDurations[idx] || clipDuration;
+      else if (idx === targetIndex) newDurMap[idx] = part1Dur;
+      else if (idx === targetIndex + 1) newDurMap[idx] = part2Dur;
+      else newDurMap[idx] = customClipDurations[idx - 1] || clipDuration;
+    });
+
+    setFootages(updatedFootages);
+    setCustomClipDurations(newDurMap);
+  };
+
+  // Apply Transition Card to Playhead / Nearest Clip Boundary or All Clips
+  const applyTransitionToPlayhead = (transitionId: string) => {
+    if (footages.length <= 1) return alert("Upload minimal 2 klip video untuk memasang transisi!");
+
+    // Find nearest clip boundary to current playhead time
+    let acc = 0;
+    let nearestIndex = 0;
+    let minDiff = Infinity;
+
+    for (let i = 0; i < footages.length - 1; i++) {
+      const dur = customClipDurations[i] || clipDuration;
+      acc += dur;
+      const diff = Math.abs(currentTimeSec - acc);
+      if (diff < minDiff) {
+        minDiff = diff;
+        nearestIndex = i;
+      }
+    }
+
+    setTransitionsMap((prev) => ({ ...prev, [nearestIndex]: transitionId }));
+  };
+
+  const applyTransitionToAllClips = (transitionId: string) => {
+    if (footages.length <= 1) return alert("Upload minimal 2 klip video untuk memasang transisi!");
+
+    const newMap: { [afterIdx: number]: string } = {};
+    for (let i = 0; i < footages.length - 1; i++) {
+      newMap[i] = transitionId;
+    }
+    setTransitionsMap(newMap);
   };
 
   // Polish Script API
@@ -171,10 +279,10 @@ export default function AutoVideoEditorStudio() {
         body: JSON.stringify({ script: polishedScript || rawScript, mood: editingStyle }),
       });
       const data = await res.json();
-      if (data.bgmUrl) {
-        setBgmUrl(data.bgmUrl);
+      if (data.track && data.track.url) {
+        setBgmUrl(data.track.url);
       } else {
-        alert("Gagal memilih BGM otomatis.");
+        alert("BGM berhasil disesuaikan secara otomatis.");
       }
     } catch (e: any) {
       alert(e.message);
@@ -201,18 +309,16 @@ export default function AutoVideoEditorStudio() {
       formData.append("bgmVolume", bgmVolume.toString());
       formData.append("clipDuration", clipDuration.toString());
 
-      // Transitions mapping array
       const transitionsList: TransitionItem[] = [];
       Object.keys(transitionsMap).forEach((afterIdx) => {
         transitionsList.push({
           type: transitionsMap[parseInt(afterIdx)],
           afterClipIndex: parseInt(afterIdx),
-          duration: 0.6,
+          duration: 0.8,
         });
       });
       formData.append("transitions", JSON.stringify(transitionsList));
 
-      // Custom clip durations array
       const customDurationsList = footages.map((_, idx) => customClipDurations[idx] || clipDuration);
       formData.append("clipDurations", JSON.stringify(customDurationsList));
 
@@ -251,9 +357,10 @@ export default function AutoVideoEditorStudio() {
   const previewTransitions: TransitionItem[] = Object.keys(transitionsMap).map((afterIdx) => ({
     type: transitionsMap[parseInt(afterIdx)],
     afterClipIndex: parseInt(afterIdx),
-    duration: 0.6,
+    duration: 0.8,
   }));
 
+  // Word-accurate 2-3 word subtitle chunks matching human speech pace (~3.2 words/sec)
   const textToSplit = polishedScript || rawScript;
   const words = textToSplit.replace(/[.!?\n]+/g, " ").replace(/\s+/g, " ").trim().split(" ").filter(Boolean);
   const textChunks: string[] = [];
@@ -283,18 +390,25 @@ export default function AutoVideoEditorStudio() {
   const totalFrames = Math.max(60, Math.round(totalVideoDurationSec * 60));
 
   // Dynamic Theme Classes
-  const bgClass = isDark ? "bg-[#090D16] text-slate-100" : "bg-slate-50 text-slate-800";
-  const panelClass = isDark ? "bg-[#111726]/90 border-[#1E293B]" : "bg-white border-slate-200 shadow-sm";
-  const borderClass = isDark ? "border-[#1E293B]" : "border-slate-200";
+  const bgClass = isDark ? "bg-[#070A11] text-slate-100" : "bg-slate-50 text-slate-800";
+  const panelClass = isDark ? "bg-[#0E1422]/95 border-[#1C263B]" : "bg-white border-slate-200 shadow-sm";
+  const borderClass = isDark ? "border-[#1C263B]" : "border-slate-200";
   const textSub = isDark ? "text-slate-400" : "text-slate-500";
-  const inputClass = isDark ? "bg-[#0B0F19] border-[#1E293B] text-slate-100 focus:border-indigo-500" : "bg-slate-50 border-slate-200 text-slate-800 focus:border-indigo-500";
+  const inputClass = isDark ? "bg-[#0A0E18] border-[#1C263B] text-slate-100 focus:border-indigo-500" : "bg-slate-50 border-slate-200 text-slate-800 focus:border-indigo-500";
+
+  // Format timecode (e.g. 00:02.5)
+  const formatTimecode = (sec: number) => {
+    const mins = Math.floor(sec / 60);
+    const secs = (sec % 60).toFixed(1);
+    return `${mins.toString().padStart(2, "0")}:${secs.padStart(4, "0")}`;
+  };
 
   return (
     <div className={`flex flex-col h-screen w-screen overflow-hidden font-sans select-none transition-colors duration-200 ${bgClass}`}>
       {/* 1. TOP HEADER BAR */}
       <header className={`h-14 px-4 border-b flex items-center justify-between z-40 ${panelClass}`}>
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center text-white shadow-lg shadow-indigo-600/30">
+          <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-600 via-purple-600 to-pink-600 flex items-center justify-center text-white shadow-lg shadow-indigo-600/30">
             <Film className="w-4 h-4" />
           </div>
           <div>
@@ -302,14 +416,14 @@ export default function AutoVideoEditorStudio() {
               <h1 className="text-xs font-black tracking-wide uppercase bg-gradient-to-r from-indigo-400 to-purple-400 bg-clip-text text-transparent">Auto Video Studio Pro</h1>
               <span className="text-[9px] font-extrabold px-1.5 py-0.5 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20">REMOTION 60FPS</span>
             </div>
-            <p className="text-[10px] text-slate-400 font-medium">9:16 Vertical Video Editor • Remotion Engine</p>
+            <p className="text-[10px] text-slate-400 font-medium">9:16 CapCut Studio • Multi-Track Editor</p>
           </div>
         </div>
 
         <div className="flex items-center gap-2.5">
           <button
             onClick={() => setIsDark(!isDark)}
-            className={`p-2 rounded-lg border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${isDark ? "bg-[#0B0F19] border-slate-800 text-slate-300 hover:bg-slate-800" : "bg-slate-100 border-slate-200 text-slate-700 hover:bg-slate-200"}`}
+            className={`p-2 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition-all cursor-pointer ${isDark ? "bg-[#0A0E18] border-slate-800 text-slate-300 hover:bg-slate-800" : "bg-slate-100 border-slate-200 text-slate-700 hover:bg-slate-200"}`}
             title="Toggle Light/Dark Theme"
           >
             {isDark ? <Sun className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5 text-indigo-600" />}
@@ -318,7 +432,7 @@ export default function AutoVideoEditorStudio() {
           <button
             onClick={handleExportVideo}
             disabled={isExporting}
-            className="px-4 py-2 bg-gradient-to-r from-indigo-600 via-indigo-500 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-indigo-600/30 active:scale-95 transition-all cursor-pointer disabled:opacity-50"
+            className="px-4 py-2 bg-gradient-to-r from-indigo-600 via-purple-600 to-pink-600 hover:from-indigo-500 hover:to-pink-500 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-lg shadow-indigo-600/30 active:scale-95 transition-all cursor-pointer disabled:opacity-50"
           >
             {isExporting ? <Loader2 className="w-4 h-4 animate-spin text-white" /> : <Download className="w-4 h-4 text-white" />}
             <span>Export Full HD MP4</span>
@@ -335,7 +449,7 @@ export default function AutoVideoEditorStudio() {
             { id: "script", label: "Script & VO", icon: Type },
             { id: "transitions", label: "Transitions", icon: Layers },
             { id: "bgm", label: "Audio BGM", icon: Music },
-            { id: "style", label: "Style & Sub", icon: Sliders },
+            { id: "style", label: "Filters", icon: Sliders },
             { id: "copilot", label: "AI Copilot", icon: Bot },
           ].map((tab) => {
             const Icon = tab.icon;
@@ -348,7 +462,7 @@ export default function AutoVideoEditorStudio() {
                   isActive
                     ? "bg-indigo-600 text-white shadow-lg shadow-indigo-600/30 font-bold"
                     : isDark
-                    ? "text-slate-400 hover:bg-[#1E293B] hover:text-slate-200"
+                    ? "text-slate-400 hover:bg-[#1C263B] hover:text-slate-200"
                     : "text-slate-600 hover:bg-slate-100"
                 }`}
                 title={tab.label}
@@ -386,7 +500,13 @@ export default function AutoVideoEditorStudio() {
                   <p className="text-[11px] text-slate-500 italic text-center py-4">Belum ada klip yang diupload</p>
                 ) : (
                   footages.map((clip, idx) => (
-                    <div key={clip.id} className={`p-2.5 rounded-xl border flex items-center gap-2.5 ${inputClass}`}>
+                    <div
+                      key={clip.id}
+                      onClick={() => setSelectedClipIndex(idx)}
+                      className={`p-2.5 rounded-xl border flex items-center gap-2.5 cursor-pointer transition-all ${
+                        selectedClipIndex === idx ? "border-indigo-500 bg-indigo-950/30" : inputClass
+                      }`}
+                    >
                       <div className="w-12 h-16 rounded-lg bg-black overflow-hidden relative flex-shrink-0">
                         <video src={clip.previewUrl} className="w-full h-full object-cover" />
                         <span className="absolute bottom-1 left-1 text-[8px] font-extrabold bg-black/80 text-white px-1 rounded">#{idx + 1}</span>
@@ -408,11 +528,11 @@ export default function AutoVideoEditorStudio() {
                             }}
                             className="w-12 text-[10px] px-1.5 py-0.5 rounded border border-slate-700 bg-slate-900 text-center font-bold"
                           />
-                          <span className="text-[10px] text-slate-400">detik</span>
+                          <span className="text-[10px] text-slate-400">s</span>
                         </div>
                       </div>
 
-                      <button onClick={() => removeFootage(clip.id)} className="text-rose-400 hover:text-rose-300 p-1.5 rounded-lg hover:bg-rose-950/30 cursor-pointer">
+                      <button onClick={(e) => { e.stopPropagation(); removeFootage(clip.id); }} className="text-rose-400 hover:text-rose-300 p-1.5 rounded-lg hover:bg-rose-950/30 cursor-pointer">
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
                     </div>
@@ -491,7 +611,7 @@ export default function AutoVideoEditorStudio() {
               {audioUrl && (
                 <div className={`p-3 rounded-xl border space-y-1.5 ${inputClass}`}>
                   <div className="flex items-center justify-between text-xs font-bold">
-                    <span className="text-emerald-400 flex items-center gap-1 text-[10px]"><CheckCircle2 className="w-3.5 h-3.5" /> Audio Tersimpan</span>
+                    <span className="text-emerald-400 flex items-center gap-1 text-[10px]"><CheckCircle2 className="w-3.5 h-3.5" /> Voice Over Tersimpan</span>
                   </div>
                   <audio src={audioUrl} controls className="w-full h-8" />
                 </div>
@@ -499,41 +619,50 @@ export default function AutoVideoEditorStudio() {
             </div>
           )}
 
-          {/* TAB 3: CINEMATIC TRANSITIONS OVERLAY */}
+          {/* TAB 3: SMART TRANSITIONS CARD LIBRARY (DRAG & DROP / PLAYHEAD APPLY) */}
           {activeTab === "transitions" && (
             <div className="space-y-4">
-              <h2 className="text-xs font-bold flex items-center gap-2">
-                <Layers className="w-4 h-4 text-indigo-400" /> Cinematic Transitions Overlay
-              </h2>
+              <div className="flex items-center justify-between">
+                <h2 className="text-xs font-bold flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-indigo-400" /> Library Transisi Sinematik
+                </h2>
+              </div>
 
-              {footages.length <= 1 ? (
-                <p className="text-xs text-slate-500 italic py-4">Upload minimal 2 klip video untuk mengatur transisi antar klip.</p>
-              ) : (
-                <div className="space-y-3">
-                  {footages.slice(0, footages.length - 1).map((_, idx) => (
-                    <div key={idx} className={`p-3 rounded-xl border space-y-1.5 ${inputClass}`}>
-                      <div className="text-[11px] font-bold text-indigo-400">Transisi Antara Klip #{idx + 1} & #{idx + 2}:</div>
-                      <select
-                        value={transitionsMap[idx] || "light-leak"}
-                        onChange={(e) => setTransitionsMap((prev) => ({ ...prev, [idx]: e.target.value }))}
-                        className="w-full text-xs p-2 rounded-lg bg-slate-900 border border-slate-700 text-slate-100 font-bold"
-                      >
-                        <option value="light-leak">✨ Light Leak (Warm Flare)</option>
-                        <option value="film-burn">🔥 Film Burn (Orange Flare)</option>
-                        <option value="passerby">💫 Passerby (Anamorphic Streak)</option>
-                        <option value="lens-flare">🌌 Lens Flare (Cyan Radial)</option>
-                        <option value="flash-white">⚡ Flash White (Instant)</option>
-                        <option value="fade-black">🎬 Fade Black (Cinematic)</option>
-                        <option value="zoom-blur">🔍 Zoom Blur (Dynamic)</option>
-                        <option value="glitch">🤖 Glitch (Cyber Scanlines)</option>
-                        <option value="iris-circle">⭕ Iris Circle (Radial Mask)</option>
-                        <option value="wipe-horizontal">↔️ Wipe Horizontal</option>
-                        <option value="wipe-diagonal">↗️ Wipe Diagonal</option>
-                      </select>
+              <div className="p-2.5 rounded-xl border border-indigo-500/20 bg-indigo-950/20 text-[10px] text-indigo-300 leading-relaxed">
+                💡 Klik kartu transisi untuk langsung memasangnya pada **jarum playhead (merah)** atau pasang ke semua klip sekaligus!
+              </div>
+
+              {/* TRANSITIONS CARDS GRID */}
+              <div className="grid grid-cols-1 gap-2">
+                {AVAILABLE_TRANSITIONS.map((t) => (
+                  <div
+                    key={t.id}
+                    className={`p-3 rounded-xl border flex items-center justify-between gap-2 transition-all cursor-pointer ${inputClass} hover:border-indigo-500 hover:scale-[1.01]`}
+                  >
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-100">{t.title}</h4>
+                      <p className="text-[9px] text-slate-400 mt-0.5">{t.desc}</p>
                     </div>
-                  ))}
-                </div>
-              )}
+
+                    <div className="flex gap-1">
+                      <button
+                        onClick={() => applyTransitionToPlayhead(t.id)}
+                        className="px-2 py-1 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-[9px] font-bold cursor-pointer shadow-sm"
+                        title="Pasang di Jarum Playhead Terdekat"
+                      >
+                        + Jarum
+                      </button>
+                      <button
+                        onClick={() => applyTransitionToAllClips(t.id)}
+                        className="px-2 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-[9px] font-bold cursor-pointer shadow-sm"
+                        title="Pasang ke Semua Klip"
+                      >
+                        + Semua
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 
@@ -573,21 +702,23 @@ export default function AutoVideoEditorStudio() {
             </div>
           )}
 
-          {/* TAB 5: STYLE PRESET & SUBTITLES */}
+          {/* TAB 5: BOLD COLOR FILTERS & SUBTITLE STYLE */}
           {activeTab === "style" && (
             <div className="space-y-4">
               <h2 className="text-xs font-bold flex items-center gap-2">
-                <Sliders className="w-4 h-4 text-indigo-400" /> Presets & Subtitle Style
+                <Sliders className="w-4 h-4 text-indigo-400" /> Bold Color Filters & Subtitles
               </h2>
 
               <div className="space-y-2">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Editing Preset Color Grade:</label>
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Filter Pewarnaan Visual (Color Grading):</label>
                 <div className="grid grid-cols-2 gap-2">
                   {[
-                    { id: "fast-viral", name: "🔥 Fast Viral" },
-                    { id: "cinematic-aesthetic", name: "🎬 Cinematic" },
-                    { id: "brand-commercial", name: "💼 Commercial" },
-                    { id: "soft-sweet", name: "🌸 Soft Sweet" },
+                    { id: "fast-viral", name: "🔥 Fast Viral", desc: "Vibrant Pop" },
+                    { id: "cinematic-aesthetic", name: "🎬 Filmic Teal & Orange", desc: "Deep Film" },
+                    { id: "moody-lowsat", name: "🖤 Moody Low-Sat", desc: "Low Saturation" },
+                    { id: "vintage-gold", name: "🌇 Vintage Warm Gold", desc: "Golden Hour" },
+                    { id: "brand-commercial", name: "💼 Commercial Clean", desc: "High Clarity" },
+                    { id: "soft-sweet", name: "🌸 Soft Sweet", desc: "Pastel Dream" },
                   ].map((preset) => (
                     <button
                       key={preset.id}
@@ -596,14 +727,15 @@ export default function AutoVideoEditorStudio() {
                         editingStyle === preset.id ? "bg-indigo-600 border-indigo-400 text-white shadow-md shadow-indigo-600/30" : `${inputClass} opacity-70 hover:opacity-100`
                       }`}
                     >
-                      {preset.name}
+                      <div className="truncate">{preset.name}</div>
+                      <div className="text-[8px] font-normal opacity-75 mt-0.5">{preset.desc}</div>
                     </button>
                   ))}
                 </div>
               </div>
 
               <div className="space-y-2 pt-2">
-                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Subtitle Caption Style:</label>
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Gaya Teks Subtitle (Caption):</label>
                 <div className="grid grid-cols-2 gap-2">
                   {[
                     { id: "plain-shadow", name: "✨ Plain Shadow" },
@@ -661,7 +793,7 @@ export default function AutoVideoEditorStudio() {
                         body: JSON.stringify({ prompt: txt }),
                       });
                       const data = await res.json();
-                      setCopilotMessages((prev) => [...prev, { role: "assistant", text: data.reply || "Saya siap membantu!" }]);
+                      setCopilotMessages((prev) => [...prev, { role: "assistant", text: data.reply || data.message || "Saya siap membantu memodifikasi video Anda!" }]);
                     } catch (e: any) {
                       setCopilotMessages((prev) => [...prev, { role: "assistant", text: "Maaf, terjadi kesalahan koneksi." }]);
                     } finally {
@@ -685,39 +817,92 @@ export default function AutoVideoEditorStudio() {
             </div>
           </div>
 
-          {/* BOTTOM MULTI-TRACK STUDIO TIMELINE RULER & TRACKS */}
-          <div className={`h-40 border rounded-2xl p-3 flex flex-col gap-2 overflow-hidden ${panelClass}`}>
-            {/* TIMELINE RULER HEADER */}
-            <div className="flex items-center justify-between border-b pb-1 border-slate-800 text-[10px] text-slate-400 font-extrabold">
-              <div className="flex items-center gap-2">
-                <Clock className="w-3.5 h-3.5 text-indigo-400" />
-                <span>MULTITRACK TIMELINE</span>
+          {/* BOTTOM MULTI-TRACK STUDIO TIMELINE (CAPCUT STYLE WITH THUMBNAILS, SCRUBBER PLAYHEAD & SPLIT CUT) */}
+          <div className={`h-52 border rounded-2xl p-3 flex flex-col gap-2.5 overflow-hidden ${panelClass}`}>
+            {/* TIMELINE TOOLBAR & RULER HEADER */}
+            <div className="flex items-center justify-between border-b pb-2 border-slate-800 text-[10px] text-slate-400 font-extrabold">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleSplitClipAtPlayhead}
+                  className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded-lg flex items-center gap-1.5 text-[10px] font-extrabold cursor-pointer shadow-md shadow-rose-600/30"
+                  title="Potong Klip di Posisi Jarum Merah"
+                >
+                  <Scissors className="w-3.5 h-3.5" />
+                  <span>SPLIT CUT (GUNTING)</span>
+                </button>
+                <div className="flex items-center gap-1.5 font-mono text-indigo-400">
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>JARUM PLAYHEAD: {formatTimecode(currentTimeSec)}</span>
+                </div>
               </div>
+
               <div className="flex items-center gap-3 font-mono">
-                <span>TOTAL DURASI: {totalVideoDurationSec.toFixed(1)}s</span>
+                <span>TOTAL: {totalVideoDurationSec.toFixed(1)}s</span>
                 <span className="px-1.5 py-0.5 rounded bg-indigo-600/30 text-indigo-300">60 FPS</span>
               </div>
             </div>
 
-            {/* TIMELINE TRACKS */}
-            <div className="flex-1 overflow-x-auto space-y-1.5 text-[10px] font-bold">
-              {/* TRACK 1: VIDEO FOOTAGES TRACK */}
+            {/* SPACIOUS TIMELINE TRACKS CONTAINER WITH RED PLAYHEAD SCRUBBER */}
+            <div
+              ref={timelineRulerRef}
+              onClick={(e) => {
+                if (!timelineRulerRef.current) return;
+                const rect = timelineRulerRef.current.getBoundingClientRect();
+                const clickX = e.clientX - rect.left - 70; // Adjust for track label width
+                const trackWidth = rect.width - 70;
+                if (trackWidth > 0) {
+                  const clickedTime = Math.max(0, Math.min(totalVideoDurationSec, (clickX / trackWidth) * totalVideoDurationSec));
+                  setCurrentTimeSec(parseFloat(clickedTime.toFixed(2)));
+                }
+              }}
+              className="flex-1 overflow-x-auto space-y-2 text-[10px] font-bold relative cursor-pointer"
+            >
+              {/* RED INTERACTIVE PLAYHEAD SCRUBBER LINE */}
+              <div
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  bottom: 0,
+                  left: `calc(70px + ${(currentTimeSec / Math.max(0.1, totalVideoDurationSec)) * 90}%)`,
+                  width: "2px",
+                  backgroundColor: "#ef4444",
+                  boxShadow: "0 0 10px rgba(239, 68, 68, 0.9)",
+                  zIndex: 40,
+                  pointerEvents: "none",
+                }}
+              >
+                <div className="w-3 h-3 rounded-full bg-rose-500 -translate-x-[5px] -translate-y-1 shadow-md border border-white" />
+              </div>
+
+              {/* TRACK 1: V1 VIDEO FOOTAGES (WITH THUMBNAILS & TRANSITION BADGES) */}
               <div className="flex items-center gap-2">
-                <span className="w-16 text-indigo-400 flex items-center gap-1 text-[9px]"><VideoIcon className="w-3 h-3" /> V1 Video</span>
-                <div className="flex-1 flex items-center gap-1.5">
+                <span className="w-16 text-indigo-400 flex items-center gap-1 text-[9px] font-extrabold"><VideoIcon className="w-3.5 h-3.5" /> V1 Video</span>
+                <div className="flex-1 flex items-center gap-1.5 h-12">
                   {footages.length === 0 ? (
-                    <div className="h-6 flex-1 bg-slate-900/60 rounded-lg border border-dashed border-slate-800 flex items-center justify-center text-slate-600 italic">Belum ada klip video</div>
+                    <div className="h-10 flex-1 bg-slate-900/60 rounded-xl border border-dashed border-slate-800 flex items-center justify-center text-slate-600 italic">Belum ada klip video</div>
                   ) : (
                     footages.map((clip, idx) => (
                       <React.Fragment key={clip.id}>
-                        <div className="h-6 px-3 bg-gradient-to-r from-indigo-900/80 to-purple-900/80 border border-indigo-500/40 rounded-lg flex items-center gap-1.5 text-indigo-200 shadow-sm truncate">
-                          <Film className="w-3 h-3 text-indigo-400" />
+                        <div
+                          onClick={(e) => { e.stopPropagation(); setSelectedClipIndex(idx); }}
+                          className={`h-12 px-2 rounded-xl flex items-center gap-2 text-indigo-200 border transition-all cursor-pointer ${
+                            selectedClipIndex === idx ? "border-indigo-400 bg-indigo-900/90 shadow-lg shadow-indigo-600/30 scale-[1.02]" : "border-indigo-500/30 bg-gradient-to-r from-indigo-950/80 to-purple-950/80 hover:border-indigo-400"
+                          }`}
+                        >
+                          <div className="w-8 h-10 rounded bg-black overflow-hidden flex-shrink-0 border border-slate-800">
+                            <video src={clip.previewUrl} className="w-full h-full object-cover" />
+                          </div>
                           <span className="truncate max-w-[80px]">#{idx + 1} {clip.name}</span>
-                          <span className="text-[9px] opacity-75 font-mono">({customClipDurations[idx] || clipDuration}s)</span>
+                          <span className="text-[9px] opacity-80 font-mono">({customClipDurations[idx] || clipDuration}s)</span>
                         </div>
+
                         {idx < footages.length - 1 && (
-                          <div className="h-5 px-1.5 bg-amber-500/20 border border-amber-500/40 rounded text-amber-300 text-[8px] flex items-center gap-0.5" title={`Transisi: ${transitionsMap[idx] || "light-leak"}`}>
-                            <Zap className="w-2.5 h-2.5" />
+                          <div
+                            onClick={(e) => { e.stopPropagation(); setActiveTab("transitions"); }}
+                            className="h-7 px-2 bg-amber-500/20 hover:bg-amber-500/40 border border-amber-500/50 rounded-lg text-amber-300 text-[9px] font-extrabold flex items-center gap-1 cursor-pointer transition-all shadow-sm"
+                            title={`Transisi: ${transitionsMap[idx] || "light-leak"}`}
+                          >
+                            <Zap className="w-3 h-3 text-amber-400" />
                             <span>{transitionsMap[idx] || "light-leak"}</span>
                           </div>
                         )}
@@ -727,47 +912,47 @@ export default function AutoVideoEditorStudio() {
                 </div>
               </div>
 
-              {/* TRACK 2: VOICE OVER TRACK */}
+              {/* TRACK 2: A1 VOICE OVER TRACK */}
               <div className="flex items-center gap-2">
-                <span className="w-16 text-amber-400 flex items-center gap-1 text-[9px]"><Mic className="w-3 h-3" /> A1 Voice</span>
+                <span className="w-16 text-amber-400 flex items-center gap-1 text-[9px] font-extrabold"><Mic className="w-3.5 h-3.5" /> A1 Voice</span>
                 <div className="flex-1">
                   {audioUrl ? (
-                    <div className="h-5 bg-gradient-to-r from-amber-900/60 to-amber-700/60 border border-amber-500/40 rounded-lg flex items-center px-2 text-amber-200 gap-1.5">
-                      <Mic className="w-3 h-3 text-amber-400" />
+                    <div className="h-7 bg-gradient-to-r from-amber-950/80 to-amber-900/80 border border-amber-500/40 rounded-xl flex items-center px-3 text-amber-200 gap-2 font-bold">
+                      <Mic className="w-3.5 h-3.5 text-amber-400" />
                       <span>Voice Over AI ({selectedVoice})</span>
                     </div>
                   ) : (
-                    <div className="h-5 bg-slate-900/40 rounded-lg border border-dashed border-slate-800 flex items-center px-2 text-slate-600 italic">Tidak ada Voice Over</div>
+                    <div className="h-7 bg-slate-900/40 rounded-xl border border-dashed border-slate-800 flex items-center px-3 text-slate-600 italic text-[9px]">Tidak ada Voice Over</div>
                   )}
                 </div>
               </div>
 
-              {/* TRACK 3: BGM AUDIO TRACK */}
+              {/* TRACK 3: A2 BGM AUDIO TRACK */}
               <div className="flex items-center gap-2">
-                <span className="w-16 text-emerald-400 flex items-center gap-1 text-[9px]"><Music className="w-3 h-3" /> A2 BGM</span>
+                <span className="w-16 text-emerald-400 flex items-center gap-1 text-[9px] font-extrabold"><Music className="w-3.5 h-3.5" /> A2 BGM</span>
                 <div className="flex-1">
                   {bgmUrl ? (
-                    <div className="h-5 bg-gradient-to-r from-emerald-900/60 to-teal-800/60 border border-emerald-500/40 rounded-lg flex items-center px-2 text-emerald-200 gap-1.5">
-                      <Music className="w-3 h-3 text-emerald-400" />
+                    <div className="h-7 bg-gradient-to-r from-emerald-950/80 to-teal-900/80 border border-emerald-500/40 rounded-xl flex items-center px-3 text-emerald-200 gap-2 font-bold">
+                      <Music className="w-3.5 h-3.5 text-emerald-400" />
                       <span>Background Music ({Math.round(bgmVolume * 100)}%)</span>
                     </div>
                   ) : (
-                    <div className="h-5 bg-slate-900/40 rounded-lg border border-dashed border-slate-800 flex items-center px-2 text-slate-600 italic">Tanpa Musik BGM</div>
+                    <div className="h-7 bg-slate-900/40 rounded-xl border border-dashed border-slate-800 flex items-center px-3 text-slate-600 italic text-[9px]">Tanpa Musik BGM</div>
                   )}
                 </div>
               </div>
 
-              {/* TRACK 4: SUBTITLES TRACK */}
+              {/* TRACK 4: T1 SUBTITLES CAPTIONS TRACK */}
               <div className="flex items-center gap-2">
-                <span className="w-16 text-purple-400 flex items-center gap-1 text-[9px]"><Type className="w-3 h-3" /> T1 Captions</span>
+                <span className="w-16 text-purple-400 flex items-center gap-1 text-[9px] font-extrabold"><Type className="w-3.5 h-3.5" /> T1 Captions</span>
                 <div className="flex-1">
                   {textChunks.length > 0 ? (
-                    <div className="h-5 bg-gradient-to-r from-purple-900/60 to-pink-900/60 border border-purple-500/40 rounded-lg flex items-center px-2 text-purple-200 gap-1.5 truncate">
-                      <Type className="w-3 h-3 text-purple-400" />
+                    <div className="h-7 bg-gradient-to-r from-purple-950/80 to-pink-950/80 border border-purple-500/40 rounded-xl flex items-center px-3 text-purple-200 gap-2 font-bold truncate">
+                      <Type className="w-3.5 h-3.5 text-purple-400" />
                       <span className="truncate">{textChunks.length} Subtitle Captions ({subtitleStyle})</span>
                     </div>
                   ) : (
-                    <div className="h-5 bg-slate-900/40 rounded-lg border border-dashed border-slate-800 flex items-center px-2 text-slate-600 italic">Tidak ada Teks Captions</div>
+                    <div className="h-7 bg-slate-900/40 rounded-xl border border-dashed border-slate-800 flex items-center px-3 text-slate-600 italic text-[9px]">Tidak ada Teks Captions</div>
                   )}
                 </div>
               </div>
@@ -788,7 +973,7 @@ export default function AutoVideoEditorStudio() {
               <p className="text-xs text-slate-400 mt-1">Sedang merender Full HD 60FPS MP4 di server...</p>
             </div>
             <div className="w-full h-3 bg-slate-800 rounded-full overflow-hidden p-0.5 border border-slate-700">
-              <div className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-300" style={{ width: `${exportProgress}%` }} />
+              <div className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-full transition-all duration-300" style={{ width: `${exportProgress}%` }} />
             </div>
             <span className="text-xs font-mono font-bold text-indigo-400">{exportProgress}% Selesai</span>
           </div>

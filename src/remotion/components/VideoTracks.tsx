@@ -21,12 +21,21 @@ export const VideoTracks: React.FC<VideoTracksProps> = ({ footages, defaultClipD
         const startFrame = currentFrameAcc;
         currentFrameAcc += durationFrames;
 
-        // CSS Color grading presets
-        let filterStyle = "contrast(1.1) saturate(1.22)";
-        if (clip.colorGrade === "fast-viral") filterStyle = "contrast(1.14) saturate(1.28)";
-        else if (clip.colorGrade === "cinematic-aesthetic") filterStyle = "contrast(1.15) brightness(0.98) saturate(1.08)";
-        else if (clip.colorGrade === "brand-commercial") filterStyle = "contrast(1.08) saturate(1.16)";
-        else if (clip.colorGrade === "soft-sweet") filterStyle = "brightness(1.03) saturate(1.12)";
+        // Bold, distinct CSS Color grading presets
+        let filterStyle = "contrast(1.15) saturate(1.25)";
+        if (clip.colorGrade === "fast-viral") {
+          filterStyle = "contrast(1.22) saturate(1.45) brightness(1.04)";
+        } else if (clip.colorGrade === "cinematic-aesthetic") {
+          filterStyle = "contrast(1.28) saturate(1.12) hue-rotate(-12deg) brightness(0.95)";
+        } else if (clip.colorGrade === "moody-lowsat") {
+          filterStyle = "saturate(0.55) contrast(1.22) brightness(0.92)";
+        } else if (clip.colorGrade === "vintage-gold") {
+          filterStyle = "sepia(0.35) contrast(1.12) saturate(1.25) brightness(1.02)";
+        } else if (clip.colorGrade === "brand-commercial") {
+          filterStyle = "brightness(1.06) contrast(1.1) saturate(1.18)";
+        } else if (clip.colorGrade === "soft-sweet") {
+          filterStyle = "brightness(1.05) saturate(1.15) contrast(0.98)";
+        }
 
         return (
           <Sequence key={index} from={startFrame} durationInFrames={durationFrames}>

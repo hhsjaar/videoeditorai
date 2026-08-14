@@ -5,9 +5,11 @@ const genai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
 export async function POST(req: NextRequest) {
   try {
-    const { message, context } = await req.json();
+    const body = await req.json().catch(() => ({}));
+    const message = (body.prompt || body.message || body.text || "").trim();
+    const context = body.context || {};
 
-    if (!message?.trim()) {
+    if (!message) {
       return NextResponse.json({ error: "Pesan tidak boleh kosong." }, { status: 400 });
     }
 

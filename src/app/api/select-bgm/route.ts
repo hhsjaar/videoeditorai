@@ -90,16 +90,10 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
-    const { scriptText, apiKey } = await req.json();
+    const body = await req.json().catch(() => ({}));
+    const scriptText = (body.scriptText || body.script || body.text || "").trim();
 
-    if (!scriptText || scriptText.trim().length === 0) {
-      return NextResponse.json(
-        { error: "Naskah video tidak boleh kosong untuk analisis AI BGM." },
-        { status: 400 }
-      );
-    }
-
-    const activeApiKey = apiKey || process.env.GEMINI_API_KEY;
+    const activeApiKey = body.apiKey || process.env.GEMINI_API_KEY;
 
     let selectedTrack = BGM_TRACKS[0];
     let reasoning = "Dipilih berdasarkan analisis suasana brand naskah F&B.";
