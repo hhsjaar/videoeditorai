@@ -73,6 +73,19 @@ const AVAILABLE_TRANSITIONS = [
   { id: "vignette", title: "🎭 Color Split", desc: "Vibrant Vignette Flare", category: "Color" },
 ];
 
+const PRESET_VIRAL_BGM_TRACKS = [
+  { id: "bsl1", title: "🔥 TikTok Viral - Chill Cafe Vibe", category: "TikTok Trending / Aesthetic", url: "/bgm/bsl1.mp3" },
+  { id: "bsl2", title: "⚡ Upbeat Culinary Beat", category: "TikTok Viral / Foodie Vlog", url: "/bgm/bsl2.mp3" },
+  { id: "bsl3", title: "☕ Aesthetic Coffee Shop Mood", category: "Chillout / Minimalist Cafe", url: "/bgm/bsl3.mp3" },
+  { id: "bsl4", title: "✨ Premium Gourmet Anthem", category: "Luxury / Fine Dining", url: "/bgm/bsl4.mp3" },
+  { id: "bsl5", title: "🚀 Trendy Commercial Groove", category: "Brand Ads / Promo Viral", url: "/bgm/bsl5.mp3" },
+  { id: "bsl6", title: "🥐 Sweet Bakery & Dessert", category: "Desserts & Bakery", url: "/bgm/bsl6.mp3" },
+  { id: "bsl7", title: "🧋 Refreshing Boba & Drinks", category: "Beverage / Summer Beat", url: "/bgm/bsl7.mp3" },
+  { id: "bsl8", title: "🔥 Spicy Street Food Mukbang", category: "TikTok Mukbang / Pedas", url: "/bgm/bsl8.mp3" },
+  { id: "bsl9", title: "🍸 Stylish Bistro Lounge", category: "Nightlife / Lounge", url: "/bgm/bsl9.mp3" },
+  { id: "bsl10", title: "🎉 Level Up Grand Opening", category: "Commercial Anthem", url: "/bgm/bsl10.mp3" },
+];
+
 export default function CapCutWebStudio() {
   const [activeNavTab, setActiveNavTab] = useState<"generate" | "video" | "photo" | "audio" | "text" | "effects" | "caption" | "filter">("video");
   const [aspectRatio, setAspectRatio] = useState<"9:16" | "16:9" | "1:1">("9:16");
@@ -622,6 +635,87 @@ export default function CapCutWebStudio() {
                 >
                   {isGeneratingAudio ? "Membuat Suara AI..." : `Generate Voice Over (${selectedVoice})`}
                 </button>
+              </div>
+            )}
+
+            {/* TAB: AUDIO & BGM MUSIC LIBRARY */}
+            {activeNavTab === "audio" && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-300">Musik BGM TikTok Viral</span>
+                  <button
+                    onClick={handleAutoBgm}
+                    disabled={isSelectingBgm}
+                    className="px-2 py-1 text-[9px] bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded font-bold flex items-center gap-1 shadow cursor-pointer"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    {isSelectingBgm ? "Pilih AI..." : "Auto BGM AI"}
+                  </button>
+                </div>
+
+                {/* BGM VOLUME SLIDER */}
+                <div className="p-2.5 rounded-xl bg-[#09090b] border border-[#27272a] space-y-1.5">
+                  <div className="flex justify-between text-[10px] font-bold text-slate-300">
+                    <span>Volume Musik BGM:</span>
+                    <span className="text-emerald-400 font-mono">{Math.round(bgmVolume * 100)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={bgmVolume}
+                    onChange={(e) => setBgmVolume(parseFloat(e.target.value))}
+                    className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                  />
+                </div>
+
+                {/* ACTIVE BGM STATUS */}
+                {bgmUrl && (
+                  <div className="p-2 rounded-xl bg-emerald-950/80 border border-emerald-500/40 flex items-center justify-between text-xs text-emerald-200">
+                    <div className="flex items-center gap-2 truncate">
+                      <Music className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                      <span className="font-bold text-[10px] truncate">BGM Terpasang di Layer 3</span>
+                    </div>
+                    <button
+                      onClick={() => setBgmUrl(null)}
+                      className="text-rose-400 hover:text-rose-300 p-1 text-[10px] font-bold"
+                    >
+                      Hapus
+                    </button>
+                  </div>
+                )}
+
+                {/* PRESET VIRAL BGM TRACK LIST */}
+                <div className="space-y-2">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Lagu TikTok & Commercial Hits</span>
+                  {PRESET_VIRAL_BGM_TRACKS.map((t) => {
+                    const isSelected = bgmUrl === t.url;
+                    return (
+                      <div
+                        key={t.id}
+                        className={`p-2.5 rounded-xl bg-[#09090b] border flex items-center justify-between text-xs transition-all ${
+                          isSelected ? "border-emerald-500 bg-emerald-950/40 ring-1 ring-emerald-500/30" : "border-[#27272a] hover:border-slate-600"
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1 mr-2">
+                          <p className="font-bold text-slate-200 text-[11px] truncate">{t.title}</p>
+                          <p className="text-[9px] text-emerald-400/80 font-medium">{t.category}</p>
+                        </div>
+                        <button
+                          onClick={() => setBgmUrl(t.url)}
+                          className={`px-2.5 py-1 rounded-lg text-[9px] font-bold flex-shrink-0 transition-all cursor-pointer ${
+                            isSelected
+                              ? "bg-emerald-500 text-black font-extrabold"
+                              : "bg-indigo-600 hover:bg-indigo-500 text-white"
+                          }`}
+                        >
+                          {isSelected ? "✓ Pasang" : "+ Pasang"}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
