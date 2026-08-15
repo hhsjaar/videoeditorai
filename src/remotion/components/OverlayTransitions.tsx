@@ -28,7 +28,7 @@ export const OverlayTransitions: React.FC<OverlayTransitionsProps> = ({
   for (let i = 0; i < footages.length - 1; i++) {
     const durSec = footages[i]?.duration || defaultClipDuration || 3;
     accumulatedFrames += Math.round(durSec * fps);
-    const customT = transitions.find((t) => t.afterClipIndex === i) || transitions[i];
+    const customT = transitions.find((t) => t.afterClipIndex === i);
     boundaries.push({ clipIndex: i, frame: accumulatedFrames, transition: customT });
   }
 
@@ -54,26 +54,35 @@ export const OverlayTransitions: React.FC<OverlayTransitionsProps> = ({
         const flareOpacity = Math.sin(progress * Math.PI);
         const type = transition.type;
 
-        // 1. Light Leak & Film Burn: Warm golden / orange light streak sweeping horizontally
+        // 1. Light Leak & Film Burn: Warm golden / orange light sweep (100% smooth seam coverage)
         if (type === "light-leak" || type === "film-burn") {
           const colorGradient =
             type === "film-burn"
-              ? "linear-gradient(to right, transparent, rgba(249,115,22,0.85), rgba(239,68,68,0.7), transparent)"
-              : "linear-gradient(to right, transparent, rgba(251,191,36,0.9), rgba(245,158,11,0.7), transparent)";
-          const streakLeft = (progress - 0.25) * 130;
+              ? "linear-gradient(to right, transparent, rgba(249,115,22,0.95), rgba(239,68,68,0.9), transparent)"
+              : "linear-gradient(to right, transparent, rgba(251,191,36,0.98), rgba(245,158,11,0.9), transparent)";
+          const streakLeft = (progress - 0.3) * 160;
 
           return (
             <div key={clipIndex} style={{ position: "absolute", inset: 0, overflow: "hidden", mixBlendMode: "screen" }}>
+              {/* Peak full coverage glow */}
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  backgroundColor: type === "film-burn" ? "rgba(249,115,22,0.4)" : "rgba(251,191,36,0.45)",
+                  opacity: Math.max(0, (flareOpacity - 0.4) * 1.6),
+                }}
+              />
               <div
                 style={{
                   position: "absolute",
                   top: 0,
                   bottom: 0,
-                  width: "35%",
+                  width: "60%",
                   left: `${streakLeft}%`,
                   background: colorGradient,
-                  filter: "blur(12px)",
-                  opacity: flareOpacity * 0.95,
+                  filter: "blur(18px)",
+                  opacity: flareOpacity,
                 }}
               />
             </div>

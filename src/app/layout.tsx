@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Levelup Video",
+  title: "Burjolevelup Video Editor",
   description: "AI Short Video Editor & Studio",
 };
 

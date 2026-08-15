@@ -1,6 +1,7 @@
 export interface FootageItem {
   url: string;
   duration: number; // in seconds
+  startFromSec?: number; // start offset in seconds for center-cut trimming
   colorGrade?: string;
 }
 
@@ -24,5 +25,7 @@ export interface MainCompositionProps {
   bgmUrl?: string;
   bgmVolume?: number;
   subtitleStyle?: string;
+  subtitleFontSize?: number;
+  subtitleBottomPos?: number;
   clipDuration?: number;
 }
