@@ -713,7 +713,7 @@ export default function CapCutWebStudio() {
             position: "absolute",
             top: 0,
             bottom: 0,
-            left: `calc(100px + ${(currentTimeSec / Math.max(0.1, totalVideoDurationSec)) * 88}%)`,
+            left: `calc(100px + (100% - 100px) * ${currentTimeSec / Math.max(0.1, totalVideoDurationSec)})`,
             width: "2px",
             backgroundColor: "#ffffff",
             boxShadow: "0 0 14px rgba(255, 255, 255, 1), 0 0 4px rgba(255, 255, 255, 0.8)",
@@ -733,8 +733,8 @@ export default function CapCutWebStudio() {
           onClick={(e) => {
             if (!timelineRulerRef.current) return;
             const rect = timelineRulerRef.current.getBoundingClientRect();
-            const clickX = e.clientX - rect.left - 90;
-            const trackWidth = rect.width - 90;
+            const clickX = e.clientX - rect.left - 100;
+            const trackWidth = rect.width - 100;
             if (trackWidth > 0) {
               const clickedTime = Math.max(0, Math.min(totalVideoDurationSec, (clickX / trackWidth) * totalVideoDurationSec));
               setSeekToSec(parseFloat(clickedTime.toFixed(2)));
