@@ -247,9 +247,19 @@ export default function CapCutWebStudio() {
     setFootages((prev) => [...prev, pasted]);
   }, [copiedClip]);
 
-  // Keyboard Shortcuts (Cmd+X, Cmd+C, Cmd+V, Delete, Spacebar)
+  // Keyboard Shortcuts (Cmd+X, Cmd+C, Cmd+V, Delete/Backspace on Mac)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
       const isCmdOrCtrl = e.metaKey || e.ctrlKey;
       if (isCmdOrCtrl && e.key.toLowerCase() === "x") {
         e.preventDefault();
@@ -260,8 +270,16 @@ export default function CapCutWebStudio() {
       } else if (isCmdOrCtrl && e.key.toLowerCase() === "v") {
         e.preventDefault();
         handlePasteClip();
-      } else if (e.key === "Delete" || e.key === "Backspace") {
+      } else if (
+        e.key === "Delete" ||
+        e.key === "Backspace" ||
+        e.code === "Delete" ||
+        e.code === "Backspace" ||
+        e.keyCode === 8 ||
+        e.keyCode === 46
+      ) {
         if (selectedClipIndex !== null && footages[selectedClipIndex]) {
+          e.preventDefault();
           removeFootage(footages[selectedClipIndex].id);
           setSelectedClipIndex(null);
         }
@@ -837,8 +855,8 @@ export default function CapCutWebStudio() {
           }}
           className="h-10 bg-[#121215] border-b border-[#27272a] px-3 flex items-center relative select-none cursor-pointer overflow-hidden z-20"
         >
-          {/* TOOLBAR CONTROLS (SPLIT, COPY, PASTE) */}
-          <div className="w-[100px] text-[10px] font-extrabold text-slate-400 flex items-center gap-1.5">
+          {/* TOOLBAR CONTROLS (SPLIT, COPY, PASTE, DELETE) */}
+          <div className="w-[125px] text-[10px] font-extrabold text-slate-400 flex items-center gap-1.5">
             <button
               onClick={(e) => { e.stopPropagation(); handleSplitClipAtPlayhead(); }}
               className="p-1 rounded bg-rose-600/20 hover:bg-rose-600/40 text-rose-400 border border-rose-500/40 cursor-pointer"
@@ -859,6 +877,21 @@ export default function CapCutWebStudio() {
               title="Paste Clip (Cmd+V)"
             >
               <Clipboard className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (selectedClipIndex !== null && footages[selectedClipIndex]) {
+                  removeFootage(footages[selectedClipIndex].id);
+                  setSelectedClipIndex(null);
+                } else {
+                  alert("Klik klip video yang ingin dihapus terlebih dahulu!");
+                }
+              }}
+              className="p-1 rounded bg-rose-600/20 hover:bg-rose-600/40 text-rose-400 border border-rose-500/40 cursor-pointer"
+              title="Hapus Klip (Delete / Backspace)"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
             </button>
           </div>
 
