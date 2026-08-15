@@ -21,8 +21,8 @@ export const VideoTracks: React.FC<VideoTracksProps> = ({ footages, defaultClipD
         const startFrame = currentFrameAcc;
         currentFrameAcc += durationFrames;
 
-        // Bold, distinct CSS Color grading presets
-        let filterStyle = "contrast(1.15) saturate(1.25)";
+        // CSS Color grading presets (default: none / original colors)
+        let filterStyle = "none";
         if (clip.colorGrade === "fast-viral") {
           filterStyle = "contrast(1.22) saturate(1.45) brightness(1.04)";
         } else if (clip.colorGrade === "cinematic-aesthetic") {

@@ -107,8 +107,8 @@ export default function CapCutWebStudio() {
   const [bgmVolume, setBgmVolume] = useState<number>(0.2);
   const [isSelectingBgm, setIsSelectingBgm] = useState<boolean>(false);
 
-  // Style state
-  const [editingStyle, setEditingStyle] = useState<string>("fast-viral");
+  // Style state (default: none / original colors)
+  const [editingStyle, setEditingStyle] = useState<string>("none");
   const [subtitleStyle, setSubtitleStyle] = useState<string>("plain-shadow");
 
   // Export State
@@ -817,13 +817,15 @@ export default function CapCutWebStudio() {
                     );
                   })}
 
-                  {/* ABSOLUTE TRANSITION BADGES OVERLAID EXACTLY ON CLIP SEAMS */}
+                  {/* ABSOLUTE TRANSITION BADGES OVERLAID EXACTLY ON CLIP SEAMS (ONLY IF EXPLICITLY ADDED) */}
                   {(() => {
                     let accPercent = 0;
                     return footages.map((_, idx) => {
                       if (idx >= footages.length - 1) return null;
                       const clipDur = customClipDurations[idx] || clipDuration;
                       accPercent += (clipDur / Math.max(0.1, totalVideoDurationSec)) * 100;
+
+                      if (!transitionsMap[idx]) return null;
 
                       return (
                         <div
@@ -833,7 +835,7 @@ export default function CapCutWebStudio() {
                           className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 px-2 py-1 rounded-lg bg-amber-500/90 hover:bg-amber-400 text-black text-[9px] font-extrabold cursor-pointer z-30 shadow-lg border border-white/60 flex items-center gap-1"
                           title="Transition Badge (Click to Edit)"
                         >
-                          ⚡ {transitionsMap[idx] || "light-leak"}
+                          ⚡ {transitionsMap[idx]}
                         </div>
                       );
                     });
