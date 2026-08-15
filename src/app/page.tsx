@@ -95,6 +95,7 @@ export default function CapCutWebStudio() {
   const [clipDuration, setClipDuration] = useState<number>(3.0);
   const [customClipDurations, setCustomClipDurations] = useState<{ [key: number]: number }>({});
   const [selectedClipIndex, setSelectedClipIndex] = useState<number | null>(null);
+  const [selectedTimelineItem, setSelectedTimelineItem] = useState<{ type: "video" | "voiceover" | "bgm" | "subtitle"; index?: number } | null>(null);
   const [copiedClip, setCopiedClip] = useState<UploadedFootage | null>(null);
 
   // Playhead & Scrubber state (Dynamic Frame Sync)
@@ -247,6 +248,35 @@ export default function CapCutWebStudio() {
     setFootages((prev) => [...prev, pasted]);
   }, [copiedClip]);
 
+  // Delete Selected Timeline Item (Video, Voiceover, BGM, or Subtitle)
+  const handleDeleteSelectedItem = useCallback(() => {
+    if (!selectedTimelineItem) {
+      if (selectedClipIndex !== null && footages[selectedClipIndex]) {
+        removeFootage(footages[selectedClipIndex].id);
+        setSelectedClipIndex(null);
+      }
+      return;
+    }
+
+    if (selectedTimelineItem.type === "video") {
+      if (selectedClipIndex !== null && footages[selectedClipIndex]) {
+        removeFootage(footages[selectedClipIndex].id);
+        setSelectedClipIndex(null);
+      }
+    } else if (selectedTimelineItem.type === "voiceover") {
+      setAudioUrl(null);
+      setAudioFile(null);
+    } else if (selectedTimelineItem.type === "bgm") {
+      setBgmUrl(null);
+      setBgmFile(null);
+    } else if (selectedTimelineItem.type === "subtitle") {
+      setRawScript("");
+      setPolishedScript("");
+    }
+
+    setSelectedTimelineItem(null);
+  }, [selectedTimelineItem, selectedClipIndex, footages]);
+
   // Keyboard Shortcuts (Cmd+X, Cmd+C, Cmd+V, Delete/Backspace on Mac)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -278,17 +308,14 @@ export default function CapCutWebStudio() {
         e.keyCode === 8 ||
         e.keyCode === 46
       ) {
-        if (selectedClipIndex !== null && footages[selectedClipIndex]) {
-          e.preventDefault();
-          removeFootage(footages[selectedClipIndex].id);
-          setSelectedClipIndex(null);
-        }
+        e.preventDefault();
+        handleDeleteSelectedItem();
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [handleSplitClipAtPlayhead, handleCopyClip, handlePasteClip, selectedClipIndex, footages]);
+  }, [handleSplitClipAtPlayhead, handleCopyClip, handlePasteClip, handleDeleteSelectedItem]);
 
   // Apply Transition Card to Playhead / Nearest Clip Boundary or All Clips
   const applyTransitionToPlayhead = (transitionId: string) => {
@@ -977,9 +1004,25 @@ export default function CapCutWebStudio() {
             <span className="w-20 text-[10px] font-extrabold text-amber-400">Layer 2 (A1)</span>
             <div className="flex-1">
               {audioUrl ? (
-                <div className="h-10 bg-gradient-to-r from-amber-950/90 via-amber-900/90 to-amber-950/90 border border-amber-500/50 rounded-xl flex items-center px-4 text-amber-200 text-[10px] font-extrabold gap-2 shadow-md">
-                  <Mic className="w-4 h-4 text-amber-400" />
-                  <span>Voice Over AI ({selectedVoice}) Waveform Audio Track</span>
+                <div
+                  onClick={() => setSelectedTimelineItem({ type: "voiceover" })}
+                  className={`h-10 border rounded-xl flex items-center justify-between px-4 text-amber-200 text-[10px] font-extrabold cursor-pointer transition-all ${
+                    selectedTimelineItem?.type === "voiceover"
+                      ? "border-amber-400 bg-amber-900 ring-2 ring-amber-500/80 shadow-lg"
+                      : "bg-gradient-to-r from-amber-950/90 via-amber-900/90 to-amber-950/90 border-amber-500/50 hover:border-amber-400"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <Mic className="w-4 h-4 text-amber-400" />
+                    <span>Voice Over AI ({selectedVoice}) Waveform Audio Track</span>
+                  </div>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setAudioUrl(null); setAudioFile(null); setSelectedTimelineItem(null); }}
+                    className="p-1 text-rose-400 hover:text-rose-200 text-[10px] font-bold"
+                    title="Hapus Voice Over"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               ) : (
                 <div className="h-10 bg-[#09090b]/50 rounded-xl border border-dashed border-[#27272a] flex items-center px-4 text-slate-600 italic text-[10px]">
@@ -994,9 +1037,25 @@ export default function CapCutWebStudio() {
             <span className="w-20 text-[10px] font-extrabold text-emerald-400">Layer 3 (A2)</span>
             <div className="flex-1">
               {bgmUrl ? (
-                <div className="h-10 bg-gradient-to-r from-emerald-950/90 via-teal-900/90 to-emerald-950/90 border border-emerald-500/50 rounded-xl flex items-center px-4 text-emerald-200 text-[10px] font-extrabold gap-2 shadow-md">
-                  <Music className="w-4 h-4 text-emerald-400" />
-                  <span>Background Music Track ({Math.round(bgmVolume * 100)}%)</span>
+                <div
+                  onClick={() => setSelectedTimelineItem({ type: "bgm" })}
+                  className={`h-10 border rounded-xl flex items-center justify-between px-4 text-emerald-200 text-[10px] font-extrabold cursor-pointer transition-all ${
+                    selectedTimelineItem?.type === "bgm"
+                      ? "border-emerald-400 bg-emerald-900 ring-2 ring-emerald-500/80 shadow-lg"
+                      : "bg-gradient-to-r from-emerald-950/90 via-teal-900/90 to-emerald-950/90 border-emerald-500/50 hover:border-emerald-400"
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <Music className="w-4 h-4 text-emerald-400" />
+                    <span>Background Music Track ({Math.round(bgmVolume * 100)}%)</span>
+                  </div>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setBgmUrl(null); setBgmFile(null); setSelectedTimelineItem(null); }}
+                    className="p-1 text-rose-400 hover:text-rose-200 text-[10px] font-bold"
+                    title="Hapus BGM"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
               ) : (
                 <div className="h-10 bg-[#09090b]/50 rounded-xl border border-dashed border-[#27272a] flex items-center px-4 text-slate-600 italic text-[10px]">
@@ -1009,14 +1068,32 @@ export default function CapCutWebStudio() {
           {/* LAYER 4: T1 CAPTIONS SUBTITLES TRACK */}
           <div className="flex items-center gap-3">
             <span className="w-20 text-[10px] font-extrabold text-purple-400">Layer 4 (T1)</span>
-            <div className="flex-1 flex items-center gap-2 h-10 overflow-hidden">
+            <div className="flex-1">
               {textChunks.length > 0 ? (
-                textChunks.map((chunk, i) => (
-                  <div key={i} className="h-8 px-3 bg-purple-950/80 border border-purple-500/40 text-purple-200 rounded-xl text-[9px] font-extrabold flex items-center gap-1.5 truncate flex-shrink-0">
-                    <span className="bg-purple-500/20 px-1 rounded text-purple-300">cc</span>
-                    <span className="truncate">{chunk}</span>
+                <div
+                  onClick={() => setSelectedTimelineItem({ type: "subtitle" })}
+                  className={`flex items-center justify-between gap-2 h-10 overflow-hidden px-2 rounded-xl border transition-all cursor-pointer ${
+                    selectedTimelineItem?.type === "subtitle"
+                      ? "border-purple-400 bg-purple-900/50 ring-2 ring-purple-500/80"
+                      : "border-transparent"
+                  }`}
+                >
+                  <div className="flex items-center gap-2 overflow-hidden">
+                    {textChunks.map((chunk, i) => (
+                      <div key={i} className="h-8 px-3 bg-purple-950/80 border border-purple-500/40 text-purple-200 rounded-xl text-[9px] font-extrabold flex items-center gap-1.5 truncate flex-shrink-0">
+                        <span className="bg-purple-500/20 px-1 rounded text-purple-300">cc</span>
+                        <span className="truncate">{chunk}</span>
+                      </div>
+                    ))}
                   </div>
-                ))
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setRawScript(""); setPolishedScript(""); setSelectedTimelineItem(null); }}
+                    className="p-1 text-rose-400 hover:text-rose-200 text-[10px] font-bold flex-shrink-0"
+                    title="Hapus Subtitle"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               ) : (
                 <div className="w-full h-10 bg-[#09090b]/50 rounded-xl border border-dashed border-[#27272a] flex items-center px-4 text-slate-600 italic text-[10px]">
                   (T1 Subtitle Captions Kosong - Tulis Naskah di Tab Left)
