@@ -943,31 +943,45 @@ export default function CapCutWebStudio() {
       const startFromSecList = previewFootages.map((f) => f.startFromSec || 0);
       formData.append("startFromSecList", JSON.stringify(startFromSecList));
 
-      setExportProgress(45);
+      setExportProgress(12);
 
-      const res = await fetch("/api/render-video", {
-        method: "POST",
-        body: formData,
-      });
+      // Smooth realistic dynamic progress animation while server renders
+      const progressInterval = setInterval(() => {
+        setExportProgress((prev) => {
+          if (prev >= 92) return prev;
+          const increment = Math.max(1, Math.floor((92 - prev) / 12));
+          return Math.min(92, prev + increment);
+        });
+      }, 400);
 
-      setExportProgress(85);
+      try {
+        const res = await fetch("/api/render-video", {
+          method: "POST",
+          body: formData,
+        });
 
-      if (!res.ok) {
-        let errMsg = "Gagal mengekspor video.";
-        try {
-          const errData = await res.json();
-          errMsg = errData.error || errMsg;
-        } catch {
-          const rawText = await res.text();
-          errMsg = rawText ? `Server Error (${res.status}): ${rawText.slice(0, 150)}` : `Server Error (${res.status})`;
+        clearInterval(progressInterval);
+        setExportProgress(96);
+
+        if (!res.ok) {
+          let errMsg = "Gagal mengekspor video.";
+          try {
+            const errData = await res.json();
+            errMsg = errData.error || errMsg;
+          } catch {
+            const rawText = await res.text();
+            errMsg = rawText ? `Server Error (${res.status}): ${rawText.slice(0, 150)}` : `Server Error (${res.status})`;
+          }
+          throw new Error(errMsg);
         }
-        throw new Error(errMsg);
-      }
 
-      const blob = await res.blob();
-      const videoObjectUrl = URL.createObjectURL(blob);
-      setExportedVideoUrl(videoObjectUrl);
-      setExportProgress(100);
+        const blob = await res.blob();
+        const videoObjectUrl = URL.createObjectURL(blob);
+        setExportedVideoUrl(videoObjectUrl);
+        setExportProgress(100);
+      } finally {
+        clearInterval(progressInterval);
+      }
     } catch (err: any) {
       alert(err.message || "Terjadi kesalahan saat mengekspor video.");
     } finally {
@@ -2428,8 +2442,10 @@ export default function CapCutWebStudio() {
               <Film className="w-6 h-6" />
             </div>
             <div>
-              <h3 className="text-sm font-black">Mengespor Video (Remotion Engine)</h3>
-              <p className="text-xs text-slate-400 mt-1">Sedang merender Full HD 60FPS MP4 di server...</p>
+              <h3 className="text-sm font-black text-white">Mengekspor Video MP4</h3>
+              <p className="text-xs text-slate-400 mt-1">
+                {exportProgress < 30 ? "Menyiapkan aset & memotong klip..." : exportProgress < 80 ? "Merender video di server..." : exportProgress < 100 ? "Finalisasi file MP4..." : "Selesai!"}
+              </p>
             </div>
             <div className="w-full h-3 bg-slate-800 rounded-full overflow-hidden p-0.5 border border-slate-700">
               <div className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-full transition-all duration-300" style={{ width: `${exportProgress}%` }} />
