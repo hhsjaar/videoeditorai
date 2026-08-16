@@ -328,20 +328,27 @@ export async function POST(req: NextRequest) {
     composition.durationInFrames = Math.max(targetFps, totalFrames);
     console.log(`[render-video] composition: totalFrames=${totalFrames}, fps=${targetFps}, duration=${(totalFrames/targetFps).toFixed(2)}s`);
 
-    // 7. Render MP4 video via Remotion renderer (Optimized for Linux VPS)
+    // 7. Render MP4 video via Remotion renderer (Optimized for 2 vCPU VPS)
     const finalVideoPath = path.join(tempDir, "final_export.mp4");
+    console.log(`[render-video] Starting Chromium rendering for ${composition.durationInFrames} frames...`);
     await renderMedia({
       composition,
       serveUrl,
       codec: "h264",
       outputLocation: finalVideoPath,
       inputProps,
-      // Batasi concurrency ke 1 agar tidak memakan RAM berlebih di VPS
-      concurrency: 1,
+      concurrency: 2, // Manfaatkan 2 vCPU untuk render 2x lebih cepat
       chromiumOptions: {
         enableMultiProcessOnLinux: true,
       },
+      onProgress: ({ renderedFrames }) => {
+        const percent = Math.round((renderedFrames / composition.durationInFrames) * 100);
+        if (renderedFrames % 60 === 0 || renderedFrames === composition.durationInFrames) {
+          console.log(`[render-video] 🎬 Rendering: ${percent}% (${renderedFrames}/${composition.durationInFrames} frames)`);
+        }
+      },
     });
+    console.log(`[render-video] ✓ Render finished successfully! Sending MP4 file to client.`);
 
     const videoBuffer = await require("fs/promises").readFile(finalVideoPath);
 
