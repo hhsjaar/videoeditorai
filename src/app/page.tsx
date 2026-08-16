@@ -953,8 +953,15 @@ export default function CapCutWebStudio() {
       setExportProgress(85);
 
       if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || "Gagal mengekspor video.");
+        let errMsg = "Gagal mengekspor video.";
+        try {
+          const errData = await res.json();
+          errMsg = errData.error || errMsg;
+        } catch {
+          const rawText = await res.text();
+          errMsg = rawText ? `Server Error (${res.status}): ${rawText.slice(0, 150)}` : `Server Error (${res.status})`;
+        }
+        throw new Error(errMsg);
       }
 
       const blob = await res.blob();
@@ -962,7 +969,7 @@ export default function CapCutWebStudio() {
       setExportedVideoUrl(videoObjectUrl);
       setExportProgress(100);
     } catch (err: any) {
-      alert(err.message);
+      alert(err.message || "Terjadi kesalahan saat mengekspor video.");
     } finally {
       setIsExporting(false);
     }

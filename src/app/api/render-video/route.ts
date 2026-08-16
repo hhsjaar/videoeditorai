@@ -328,7 +328,7 @@ export async function POST(req: NextRequest) {
     composition.durationInFrames = Math.max(targetFps, totalFrames);
     console.log(`[render-video] composition: totalFrames=${totalFrames}, fps=${targetFps}, duration=${(totalFrames/targetFps).toFixed(2)}s`);
 
-    // 7. Render MP4 video via Remotion renderer
+    // 7. Render MP4 video via Remotion renderer (Optimized for Linux VPS)
     const finalVideoPath = path.join(tempDir, "final_export.mp4");
     await renderMedia({
       composition,
@@ -336,6 +336,11 @@ export async function POST(req: NextRequest) {
       codec: "h264",
       outputLocation: finalVideoPath,
       inputProps,
+      // Batasi concurrency ke 1 agar tidak memakan RAM berlebih di VPS
+      concurrency: 1,
+      chromiumOptions: {
+        enableMultiProcessOnLinux: true,
+      },
     });
 
     const videoBuffer = await require("fs/promises").readFile(finalVideoPath);
