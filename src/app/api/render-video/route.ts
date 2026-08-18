@@ -60,12 +60,11 @@ function splitTextIntoAutoCaptionChunks(text: string, wordsPerChunk = 3): string
 // Download via GET /api/render-download/[jobId] when done.
 export async function POST(req: NextRequest) {
   const jobId = randomUUID();
-  // Files must be served via HTTP — Remotion's proxy does NOT support file:// URLs.
-  // Save to public/render-tmp/<jobId>/ so Next.js serves them at /render-tmp/<jobId>/...
-  const PORT = process.env.PORT || "3000";
-  const publicBase = `/render-tmp/${jobId}`;
-  const tempDir = path.join(process.cwd(), "public", "render-tmp", jobId);
-  const toHttpUrl = (filename: string) => `http://localhost:${PORT}/render-tmp/${jobId}/${filename}`;
+  // Use tmp/ dir — media files are served to Remotion via a per-job mini HTTP
+  // server started inside renderQueue.ts. No need for public/ or file:// URLs.
+  const tempDir = path.join(process.cwd(), "tmp", `remotion_${jobId}`);
+  // Filenames only — renderQueue will prepend the mini server baseUrl
+  const toFilename = (filename: string) => filename;
 
   try {
     await mkdir(tempDir, { recursive: true });
@@ -152,13 +151,13 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 4. Build footageItems with http:// URLs served by Next.js static server
+    // 4. Build footageItems — store filename only, renderQueue constructs full http URLs
     const footageItems = savedFootageFilenames.map((fn, i) => {
       const meta = footagesMetaList[i] || {};
       const dur = meta.duration || (clipDurationsList[i] > 0 ? clipDurationsList[i] : defaultTrimSec);
       const startSec = meta.startFromSec !== undefined ? meta.startFromSec : (startFromSecList[i] || 0);
       return {
-        url: toHttpUrl(fn),
+        url: fn,
         duration: dur,
         startFromSec: startSec,
         colorGrade: meta.colorGrade || editingStyle,
@@ -191,7 +190,8 @@ export async function POST(req: NextRequest) {
         console.log(`[render-video] Trimming clip[${i}]: dur=${item.duration.toFixed(3)}s, start=${(item.startFromSec || 0).toFixed(3)}s`);
         const ok = await preTrimWithFfmpeg(ffmpegBin, inputPath, outputPath, item.startFromSec || 0, item.duration);
         if (ok) {
-          footageItems[i] = { ...item, url: toHttpUrl(trimmedFn), startFromSec: 0 };
+          // Store trimmed filename only — renderQueue mini server will serve it
+          footageItems[i] = { ...item, url: trimmedFn, startFromSec: 0 };
           console.log(`[render-video] clip[${i}] ✓ trimmed → ${trimmedFn}`);
         }
       }
@@ -203,8 +203,8 @@ export async function POST(req: NextRequest) {
       footageItems,
       transitionsList,
       subtitleChunksList,
-      voiceOverUrl: savedVoFilename ? toHttpUrl(savedVoFilename) : undefined,
-      bgmUrl: savedBgmFilename ? toHttpUrl(savedBgmFilename) : undefined,
+      voiceOverUrl: savedVoFilename ?? undefined,
+      bgmUrl: savedBgmFilename ?? undefined,
       bgmVolume,
       subtitleStyle,
       subtitleFontSize,

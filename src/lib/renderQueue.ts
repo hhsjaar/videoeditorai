@@ -11,6 +11,8 @@
 
 import path from "path";
 import { mkdir, rm } from "fs/promises";
+import { createReadStream, statSync } from "fs";
+import http from "http";
 import { renderMedia, selectComposition } from "@remotion/renderer";
 import { bundle } from "@remotion/bundler";
 import { exec } from "child_process";
@@ -192,81 +194,132 @@ async function runWorker() {
   console.log("[renderQueue] Worker idle (queue empty).");
 }
 
+// ─── Per-job media file server ────────────────────────────────────────────────
+// Remotion's internal proxy only supports http:// and https://.
+// We spin up a lightweight HTTP server per render job to serve media files
+// from tempDir on a random free port. Server is closed after render completes.
+async function startMediaServer(dir: string): Promise<{ baseUrl: string; close: () => void }> {
+  return new Promise((resolve, reject) => {
+    const server = http.createServer((req, res) => {
+      try {
+        const filename = decodeURIComponent((req.url ?? "/").replace(/^\//, ""));
+        const filepath = path.join(dir, filename);
+        const stat = statSync(filepath);
+        res.writeHead(200, {
+          "Content-Length": stat.size,
+          "Content-Type": "application/octet-stream",
+          "Cache-Control": "no-cache",
+        });
+        createReadStream(filepath).pipe(res);
+      } catch {
+        res.writeHead(404);
+        res.end("Not found");
+      }
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const port = (server.address() as { port: number }).port;
+      console.log(`[renderQueue] Media server started on port ${port} for dir: ${path.basename(dir)}`);
+      resolve({
+        baseUrl: `http://127.0.0.1:${port}`,
+        close: () => server.close(),
+      });
+    });
+    server.on("error", reject);
+  });
+}
+
 // ─── Core render logic ─────────────────────────────────────────────────────────
 async function processRender(job: JobState, data: RenderJobData, outputPath: string) {
   const serveUrl = await getOrBuildBundle();
 
-  const {
-    footageItems, transitionsList, subtitleChunksList,
-    voiceOverUrl, bgmUrl, bgmVolume,
-    subtitleStyle, subtitleFontSize, subtitleBottomPos,
-    defaultTrimSec, exportPreset, aspectRatio,
-  } = data;
+  // Start per-job HTTP media server so Remotion's proxy can access files
+  const { baseUrl, close: closeMediaServer } = await startMediaServer(data.tempDir);
 
-  const inputProps = {
-    footages: footageItems,
-    transitions: transitionsList,
-    subtitles: subtitleChunksList,
-    voiceOverUrl,
-    bgmUrl,
-    bgmVolume,
-    subtitleStyle,
-    subtitleFontSize,
-    subtitleBottomPos,
-    clipDuration: defaultTrimSec,
+  // Remap any URL format to http://127.0.0.1:<port>/<filename>
+  const toMediaUrl = (url: string | undefined): string | undefined => {
+    if (!url) return undefined;
+    const filename = url.split("/").pop()!;
+    return `${baseUrl}/${filename}`;
   };
 
-  const composition = await selectComposition({ serveUrl, id: "MainComposition", inputProps });
+  try {
+    const {
+      footageItems, transitionsList, subtitleChunksList,
+      voiceOverUrl, bgmUrl, bgmVolume,
+      subtitleStyle, subtitleFontSize, subtitleBottomPos,
+      defaultTrimSec, exportPreset, aspectRatio,
+    } = data;
 
-  let targetWidth = 720, targetHeight = 1280, targetFps = 30;
-  if (exportPreset === "1080p") {
-    targetFps = 60;
-    if (aspectRatio === "9:16") { targetWidth = 1080; targetHeight = 1920; }
-    else if (aspectRatio === "16:9") { targetWidth = 1920; targetHeight = 1080; }
-    else { targetWidth = 1080; targetHeight = 1080; }
-  } else if (exportPreset === "480p") {
-    targetFps = 30;
-    if (aspectRatio === "9:16") { targetWidth = 480; targetHeight = 854; }
-    else if (aspectRatio === "16:9") { targetWidth = 854; targetHeight = 480; }
-    else { targetWidth = 480; targetHeight = 480; }
-  } else {
-    if (aspectRatio === "9:16") { targetWidth = 720; targetHeight = 1280; }
-    else if (aspectRatio === "16:9") { targetWidth = 1280; targetHeight = 720; }
-    else { targetWidth = 720; targetHeight = 720; }
+    const remappedFootages = footageItems.map(f => ({ ...f, url: toMediaUrl(f.url)! }));
+
+    const inputProps = {
+      footages: remappedFootages,
+      transitions: transitionsList,
+      subtitles: subtitleChunksList,
+      voiceOverUrl: toMediaUrl(voiceOverUrl),
+      bgmUrl: toMediaUrl(bgmUrl),
+      bgmVolume,
+      subtitleStyle,
+      subtitleFontSize,
+      subtitleBottomPos,
+      clipDuration: defaultTrimSec,
+    };
+
+    const composition = await selectComposition({ serveUrl, id: "MainComposition", inputProps });
+
+    let targetWidth = 720, targetHeight = 1280, targetFps = 30;
+    if (exportPreset === "1080p") {
+      targetFps = 60;
+      if (aspectRatio === "9:16") { targetWidth = 1080; targetHeight = 1920; }
+      else if (aspectRatio === "16:9") { targetWidth = 1920; targetHeight = 1080; }
+      else { targetWidth = 1080; targetHeight = 1080; }
+    } else if (exportPreset === "480p") {
+      targetFps = 30;
+      if (aspectRatio === "9:16") { targetWidth = 480; targetHeight = 854; }
+      else if (aspectRatio === "16:9") { targetWidth = 854; targetHeight = 480; }
+      else { targetWidth = 480; targetHeight = 480; }
+    } else {
+      if (aspectRatio === "9:16") { targetWidth = 720; targetHeight = 1280; }
+      else if (aspectRatio === "16:9") { targetWidth = 1280; targetHeight = 720; }
+      else { targetWidth = 720; targetHeight = 720; }
+    }
+
+    composition.width = targetWidth;
+    composition.height = targetHeight;
+    composition.fps = targetFps;
+
+    let totalFrames = 0;
+    for (const f of footageItems) {
+      totalFrames += Math.max(1, Math.round((f.duration || defaultTrimSec || 3) * targetFps));
+    }
+    composition.durationInFrames = Math.max(targetFps, totalFrames);
+    job.totalFrames = composition.durationInFrames;
+
+    console.log(`[renderQueue] Rendering: ${composition.durationInFrames} frames @ ${targetWidth}x${targetHeight} ${targetFps}fps`);
+
+    await renderMedia({
+      composition,
+      serveUrl,
+      codec: "h264",
+      outputLocation: outputPath,
+      inputProps,
+      concurrency: 1,
+      chromiumOptions: { enableMultiProcessOnLinux: true },
+      onProgress: ({ renderedFrames }) => {
+        job.renderedFrames = renderedFrames;
+        job.progress = Math.round((renderedFrames / composition.durationInFrames) * 100);
+        if (renderedFrames % 30 === 0 || renderedFrames === composition.durationInFrames) {
+          console.log(`[renderQueue] 🎬 ${job.jobId}: ${job.progress}% (${renderedFrames}/${composition.durationInFrames})`);
+        }
+      },
+    });
+  } finally {
+    // Always close media server & cleanup temp dir, even if render failed
+    closeMediaServer();
+    rm(data.tempDir, { recursive: true, force: true }).catch(() => {});
   }
-
-  composition.width = targetWidth;
-  composition.height = targetHeight;
-  composition.fps = targetFps;
-
-  let totalFrames = 0;
-  for (const f of footageItems) {
-    totalFrames += Math.max(1, Math.round((f.duration || defaultTrimSec || 3) * targetFps));
-  }
-  composition.durationInFrames = Math.max(targetFps, totalFrames);
-  job.totalFrames = composition.durationInFrames;
-
-  console.log(`[renderQueue] Rendering: ${composition.durationInFrames} frames @ ${targetWidth}x${targetHeight} ${targetFps}fps`);
-
-  await renderMedia({
-    composition,
-    serveUrl,
-    codec: "h264",
-    outputLocation: outputPath,
-    inputProps,
-    concurrency: 1,
-    chromiumOptions: { enableMultiProcessOnLinux: true },
-    onProgress: ({ renderedFrames }) => {
-      job.renderedFrames = renderedFrames;
-      job.progress = Math.round((renderedFrames / composition.durationInFrames) * 100);
-      if (renderedFrames % 30 === 0 || renderedFrames === composition.durationInFrames) {
-        console.log(`[renderQueue] 🎬 ${job.jobId}: ${job.progress}% (${renderedFrames}/${composition.durationInFrames})`);
-      }
-    },
-  });
-
-  rm(data.tempDir, { recursive: true, force: true }).catch(() => {});
 }
+
 
 // ─── Cleanup old jobs ──────────────────────────────────────────────────────────
 async function cleanupOldJobs() {
