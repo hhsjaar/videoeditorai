@@ -173,6 +173,13 @@ export default function CapCutWebStudio() {
   const [exportProgress, setExportProgress] = useState<number>(0);
   const [exportPreset, setExportPreset] = useState<string>("720p");
   const [exportedVideoUrl, setExportedVideoUrl] = useState<string | null>(null);
+  // Async job queue state
+  const [renderJobId, setRenderJobId] = useState<string | null>(null);
+  const [renderJobStatus, setRenderJobStatus] = useState<"pending" | "rendering" | "done" | "error" | null>(null);
+  const [renderJobError, setRenderJobError] = useState<string | null>(null);
+  const [renderJobFrames, setRenderJobFrames] = useState<{ rendered: number; total: number }>({ rendered: 0, total: 0 });
+  const [renderDownloadUrl, setRenderDownloadUrl] = useState<string | null>(null);
+  const renderPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // AI Chat Assistant State (Trainee Knowledge Engine)
   const [chatMessages, setChatMessages] = useState<Array<{ sender: "user" | "ai"; text: string; actionApplied?: string }>>([
@@ -881,10 +888,47 @@ export default function CapCutWebStudio() {
   };
 
   // Render Export Video API
+  // ─── Async export with job polling ──────────────────────────────────────────
+  const startPollingJob = (jobId: string) => {
+    if (renderPollRef.current) clearInterval(renderPollRef.current);
+    renderPollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/render-status/${jobId}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        setRenderJobStatus(data.status);
+        setExportProgress(data.progress || 0);
+        setRenderJobFrames({ rendered: data.renderedFrames || 0, total: data.totalFrames || 0 });
+        if (data.status === "done") {
+          clearInterval(renderPollRef.current!);
+          renderPollRef.current = null;
+          setRenderDownloadUrl(data.downloadUrl);
+          setIsExporting(false);
+          setExportProgress(100);
+        } else if (data.status === "error") {
+          clearInterval(renderPollRef.current!);
+          renderPollRef.current = null;
+          setRenderJobError(data.error || "Render gagal di server.");
+          setIsExporting(false);
+        }
+      } catch (e) {
+        console.error("[poll] Error fetching render status:", e);
+      }
+    }, 3000);
+  };
+
   const handleExportVideo = async () => {
     if (footages.length === 0) return alert("Upload minimal 1 klip video!");
+
+    // Reset previous job state
+    setRenderJobId(null);
+    setRenderJobStatus(null);
+    setRenderJobError(null);
+    setRenderDownloadUrl(null);
+    setRenderJobFrames({ rendered: 0, total: 0 });
+    setExportProgress(5);
     setIsExporting(true);
-    setExportProgress(15);
+    if (renderPollRef.current) clearInterval(renderPollRef.current);
 
     try {
       const formData = new FormData();
@@ -943,57 +987,28 @@ export default function CapCutWebStudio() {
       const startFromSecList = previewFootages.map((f) => f.startFromSec || 0);
       formData.append("startFromSecList", JSON.stringify(startFromSecList));
 
-      setExportProgress(12);
+      // Submit job — server returns jobId immediately
+      const res = await fetch("/api/render-video", {
+        method: "POST",
+        body: formData,
+      });
 
-      // Smooth realistic dynamic progress animation while server renders
-      const progressInterval = setInterval(() => {
-        setExportProgress((prev) => {
-          if (prev >= 92) return prev;
-          const increment = Math.max(1, Math.floor((92 - prev) / 12));
-          return Math.min(92, prev + increment);
-        });
-      }, 400);
-
-      try {
-        const res = await fetch("/api/render-video", {
-          method: "POST",
-          body: formData,
-        });
-
-        clearInterval(progressInterval);
-        setExportProgress(96);
-
-        if (!res.ok) {
-          // Clone before any read — body stream can only be consumed once.
-          // We clone so we can try JSON first, then fall back to raw text safely.
-          const resClone = res.clone();
-          let errMsg = `Gagal mengekspor video (HTTP ${res.status}).`;
-          try {
-            const contentType = res.headers.get("content-type") || "";
-            if (contentType.includes("application/json")) {
-              const errData = await res.json();
-              errMsg = errData.error || errMsg;
-            } else {
-              const rawText = await resClone.text();
-              errMsg = rawText ? `Server Error (${res.status}): ${rawText.slice(0, 200)}` : errMsg;
-            }
-          } catch {
-            // If all reads fail, keep the generic message with status code
-          }
-          throw new Error(errMsg);
-        }
-
-        const blob = await res.blob();
-        const videoObjectUrl = URL.createObjectURL(blob);
-        setExportedVideoUrl(videoObjectUrl);
-        setExportProgress(100);
-      } finally {
-        clearInterval(progressInterval);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || `Server error ${res.status}`);
       }
+
+      const { jobId } = await res.json();
+      setRenderJobId(jobId);
+      setRenderJobStatus("pending");
+      setExportProgress(10);
+
+      // Start polling every 3 seconds
+      startPollingJob(jobId);
+
     } catch (err: any) {
-      alert(err.message || "Terjadi kesalahan saat mengekspor video.");
-    } finally {
       setIsExporting(false);
+      alert(err.message || "Terjadi kesalahan saat memulai render.");
     }
   };
 
@@ -1958,10 +1973,10 @@ export default function CapCutWebStudio() {
                   <button
                     onClick={handleExportVideo}
                     disabled={isExporting}
-                    className="px-3.5 py-1 bg-gradient-to-r from-indigo-600 via-purple-600 to-amber-500 hover:from-indigo-500 hover:to-amber-400 text-white rounded-lg text-xs font-black shadow-md cursor-pointer transition-all flex items-center gap-1.5"
+                    className="px-3.5 py-1 bg-gradient-to-r from-indigo-600 via-purple-600 to-amber-500 hover:from-indigo-500 hover:to-amber-400 disabled:opacity-60 disabled:cursor-not-allowed text-white rounded-lg text-xs font-black shadow-md cursor-pointer transition-all flex items-center gap-1.5"
                   >
                     <Download className="w-3.5 h-3.5" />
-                    <span>{isExporting ? `Exporting (${exportProgress}%)...` : "Export MP4"}</span>
+                    <span>{isExporting ? (renderJobStatus === "pending" ? "Mengantri..." : `Rendering ${exportProgress}%...`) : "Export MP4"}</span>
                   </button>
                 </div>
 
@@ -2442,7 +2457,7 @@ export default function CapCutWebStudio() {
         </div>
       )}
 
-      {/* RENDER EXPORT PROGRESS MODAL */}
+      {/* RENDER EXPORT PROGRESS MODAL — shows while job is running */}
       {isExporting && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
           <div className="w-96 p-6 rounded-2xl border border-[#27272a] bg-[#18181c] text-center space-y-4 shadow-2xl">
@@ -2450,35 +2465,73 @@ export default function CapCutWebStudio() {
               <Film className="w-6 h-6" />
             </div>
             <div>
-              <h3 className="text-sm font-black text-white">Mengekspor Video MP4</h3>
+              <h3 className="text-sm font-black text-white">Merender Video MP4</h3>
               <p className="text-xs text-slate-400 mt-1">
-                {exportProgress < 30 ? "Menyiapkan aset & memotong klip..." : exportProgress < 80 ? "Merender video di server..." : exportProgress < 100 ? "Finalisasi file MP4..." : "Selesai!"}
+                {renderJobStatus === "pending"
+                  ? "⏳ Job diterima, menunggu antrian render..."
+                  : renderJobStatus === "rendering"
+                  ? renderJobFrames.total > 0
+                    ? `🎬 Rendering frame ${renderJobFrames.rendered} / ${renderJobFrames.total}`
+                    : "🎬 Memulai Chromium render..."
+                  : "Menyiapkan..."}
               </p>
+              {renderJobId && (
+                <p className="text-[10px] text-slate-600 mt-1 font-mono">Job: {renderJobId.slice(0, 8)}...</p>
+              )}
             </div>
             <div className="w-full h-3 bg-slate-800 rounded-full overflow-hidden p-0.5 border border-slate-700">
-              <div className="h-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 rounded-full transition-all duration-300" style={{ width: `${exportProgress}%` }} />
+              <div
+                className={`h-full rounded-full transition-all duration-700 ${
+                  renderJobStatus === "pending"
+                    ? "bg-amber-500 w-[8%] animate-pulse"
+                    : "bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500"
+                }`}
+                style={renderJobStatus !== "pending" ? { width: `${exportProgress}%` } : undefined}
+              />
             </div>
-            <span className="text-xs font-mono font-bold text-indigo-400">{exportProgress}% Selesai</span>
+            <div className="flex items-center justify-between text-[11px]">
+              <span className="font-mono font-bold text-indigo-400">{exportProgress}%</span>
+              <span className="text-slate-500">Anda boleh tutup tab — render tetap berjalan di server</span>
+            </div>
           </div>
         </div>
       )}
 
-      {/* EXPORTED VIDEO RESULT MODAL */}
-      {exportedVideoUrl && (
+      {/* RENDER ERROR MODAL */}
+      {renderJobError && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="w-96 p-6 rounded-2xl border border-red-900/50 bg-[#18181c] text-center space-y-4 shadow-2xl">
+            <div className="text-3xl">❌</div>
+            <h3 className="text-sm font-black text-red-400">Render Gagal</h3>
+            <p className="text-xs text-slate-400 bg-slate-900 rounded-lg p-3 text-left break-words">{renderJobError}</p>
+            <button
+              onClick={() => setRenderJobError(null)}
+              className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold cursor-pointer"
+            >Tutup</button>
+          </div>
+        </div>
+      )}
+
+      {/* EXPORTED VIDEO RESULT MODAL — shows when done */}
+      {renderDownloadUrl && (
         <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
           <div className="w-[380px] p-5 rounded-2xl border border-[#27272a] bg-[#18181c] space-y-4 shadow-2xl">
             <div className="flex items-center justify-between">
               <h3 className="text-xs font-bold flex items-center gap-2 text-emerald-400">
-                <CheckCircle2 className="w-4 h-4" /> Video Berhasil Diekspor!
+                <CheckCircle2 className="w-4 h-4" /> Video Siap Didownload!
               </h3>
-              <button onClick={() => setExportedVideoUrl(null)} className="text-slate-400 hover:text-white cursor-pointer">✕</button>
+              <button onClick={() => setRenderDownloadUrl(null)} className="text-slate-400 hover:text-white cursor-pointer">✕</button>
             </div>
-            <div className="w-full aspect-[9/16] bg-black rounded-xl overflow-hidden shadow-lg border border-slate-800">
-              <video src={exportedVideoUrl} controls autoPlay className="w-full h-full object-contain" />
+            <div className="bg-slate-900 rounded-xl p-4 text-center space-y-2">
+              <div className="text-4xl">🎬</div>
+              <p className="text-xs text-slate-400">Video berhasil dirender di server.<br />Klik tombol di bawah untuk download.</p>
+              {renderJobFrames.total > 0 && (
+                <p className="text-[10px] text-slate-600 font-mono">{renderJobFrames.total} frames rendered</p>
+              )}
             </div>
             <a
-              href={exportedVideoUrl}
-              download={`AutoVideo_${Date.now()}.mp4`}
+              href={renderDownloadUrl}
+              download
               className="w-full py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-emerald-600/30"
             >
               <Download className="w-4 h-4" /> Download Video MP4

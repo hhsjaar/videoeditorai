@@ -1,65 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import path from "path";
-import { writeFile, mkdir, rm } from "fs/promises";
+import { writeFile, mkdir } from "fs/promises";
 import { exec } from "child_process";
 import { promisify } from "util";
-import { bundle } from "@remotion/bundler";
-import { renderMedia, selectComposition } from "@remotion/renderer";
+import { enqueueJob, getCachedFfmpeg } from "@/lib/renderQueue";
+import { randomUUID } from "crypto";
 
 const execAsync = promisify(exec);
 
-// ============================================================
-// MODULE-LEVEL CACHE: bundle & ffmpeg path are computed once
-// per server process lifetime, not per request.
-// This saves ~10-30s and significant RAM on every render call.
-// ============================================================
-let _cachedServeUrl: string | null = null;
-let _bundling: Promise<string> | null = null;
-let _cachedFfmpegBin: string | null | undefined = undefined; // undefined = not yet detected
-
-async function getOrBuildBundle(): Promise<string> {
-  if (_cachedServeUrl) return _cachedServeUrl;
-  if (_bundling) return _bundling; // deduplicate concurrent requests
-
-  _bundling = (async () => {
-    console.log("[render-video] Building Remotion bundle (first time, will be cached)...");
-    const entryPoint = path.join(process.cwd(), "src/remotion/index.ts");
-    const serveUrl = await bundle({
-      entryPoint,
-      ignoreRegisterRootWarning: true,
-      // NOTE: publicDir is NOT set here — files are served from tempDir per-request
-      // via Remotion's staticFile() mechanism using serveUrl override in selectComposition.
-    });
-    _cachedServeUrl = serveUrl;
-    _bundling = null;
-    console.log("[render-video] ✓ Bundle cached at:", serveUrl);
-    return serveUrl;
-  })();
-
-  return _bundling;
-}
-
-const FFMPEG_PATHS = [
-  "/opt/homebrew/bin/ffmpeg",  // macOS Apple Silicon (Homebrew)
-  "/usr/local/bin/ffmpeg",    // macOS Intel (Homebrew) / Linux
-  "/usr/bin/ffmpeg",          // Linux system
-  "ffmpeg",                   // fallback: rely on PATH
-];
-
-async function findFfmpeg(): Promise<string | null> {
-  for (const bin of FFMPEG_PATHS) {
-    try {
-      await execAsync(`"${bin}" -version`, { timeout: 5000 });
-      console.log(`[render-video] ffmpeg found at: ${bin}`);
-      return bin;
-    } catch { /* try next */ }
-  }
-  return null;
-}
-
-// Pre-trim a video clip to exact duration using ffmpeg.
-// This is MORE RELIABLE than relying on Remotion's OffthreadVideo seek,
-// especially for long iPhone .MOV / HEVC files.
+// ─── ffmpeg pre-trim helper ───────────────────────────────────────────────────
 async function preTrimWithFfmpeg(
   ffmpegBin: string,
   inputPath: string,
@@ -74,11 +23,10 @@ async function preTrimWithFfmpeg(
   try {
     const cmd = `"${ffmpegBin}" -y ${ssArg} -i "${inputPath}" ${tArg} -c copy -avoid_negative_ts make_zero "${outputPath}"`;
     console.log(`[render-video] ffmpeg cmd: ${cmd}`);
-    const { stdout, stderr } = await execAsync(cmd, { timeout: 60000 });
+    await execAsync(cmd, { timeout: 60000 });
     return true;
   } catch (err1: any) {
     console.warn(`[render-video] stream-copy failed, trying re-encode:`, err1?.message?.slice(0, 200));
-    // Fallback: re-encode (handles HEVC / VFR / non-keyframe issues)
     try {
       await execAsync(
         `"${ffmpegBin}" -y ${ssArg} -i "${inputPath}" ${tArg} -c:v libx264 -preset ultrafast -crf 23 -c:a aac -ar 44100 "${outputPath}"`,
@@ -106,8 +54,13 @@ function splitTextIntoAutoCaptionChunks(text: string, wordsPerChunk = 3): string
   return chunks;
 }
 
+// ─── POST /api/render-video ───────────────────────────────────────────────────
+// Returns { jobId } immediately. Render runs in background.
+// Poll GET /api/render-status/[jobId] for progress.
+// Download via GET /api/render-download/[jobId] when done.
 export async function POST(req: NextRequest) {
-  const tempDir = path.join(process.cwd(), "tmp", `remotion_${Date.now()}`);
+  const jobId = randomUUID();
+  const tempDir = path.join(process.cwd(), "tmp", `remotion_${jobId}`);
 
   try {
     await mkdir(tempDir, { recursive: true });
@@ -125,72 +78,68 @@ export async function POST(req: NextRequest) {
     const subtitleBottomPos = parseInt((formData.get("subtitleBottomPos") as string) || "220");
     const bgmVolume = parseFloat((formData.get("bgmVolume") as string) || "0.2");
     const defaultTrimSec = parseFloat((formData.get("clipDuration") as string) || "3.0");
+    const exportPreset = (formData.get("exportPreset") as string) || "720p";
+    const aspectRatio = (formData.get("aspectRatio") as string) || "9:16";
 
-    const transitionsJson = (formData.get("transitions") as string) || "[]";
     let transitionsList: Array<{ type: string; afterClipIndex: number; duration: number }> = [];
-    try {
-      transitionsList = JSON.parse(transitionsJson);
-    } catch { }
+    try { transitionsList = JSON.parse((formData.get("transitions") as string) || "[]"); } catch { }
 
-    const clipDurationsJson = (formData.get("clipDurations") as string) || "[]";
     let clipDurationsList: number[] = [];
-    try {
-      clipDurationsList = JSON.parse(clipDurationsJson);
-    } catch { }
+    try { clipDurationsList = JSON.parse((formData.get("clipDurations") as string) || "[]"); } catch { }
 
-    const startFromSecJson = (formData.get("startFromSecList") as string) || "[]";
     let startFromSecList: number[] = [];
-    try {
-      startFromSecList = JSON.parse(startFromSecJson);
-    } catch { }
+    try { startFromSecList = JSON.parse((formData.get("startFromSecList") as string) || "[]"); } catch { }
+
+    let subtitleChunksList: Array<{ text: string; start: number; end: number }> = [];
+    try { subtitleChunksList = JSON.parse((formData.get("subtitlesJson") as string) || "[]"); } catch { }
+
+    let footagesMetaList: Array<{ duration: number; startFromSec: number; colorGrade: string }> = [];
+    try { footagesMetaList = JSON.parse((formData.get("footagesMetaJson") as string) || "[]"); } catch { }
 
     if (footageFiles.length === 0) {
       return NextResponse.json({ error: "Minimal upload 1 klip video." }, { status: 400 });
     }
 
-    // 1. Save uploaded footage files to disk inside tempDir
+    // 1. Save footage files to tempDir
     const savedFootageFilenames: string[] = [];
     for (let i = 0; i < footageFiles.length; i++) {
       const file = footageFiles[i];
       const ext = path.extname(file.name) || ".png";
-      const filename = `footage_${i}${ext === "" || file.name.includes("Cover Akhiran") || file.name.includes("ending") ? ".png" : ext}`;
+      const isEnding = file.size === 0 || file.name.includes("Cover Akhiran") || file.name.includes("ending");
+      const filename = `footage_${i}${isEnding ? ".png" : ext}`;
       const filePath = path.join(tempDir, filename);
 
-      if (file.size === 0 || file.name.includes("Cover Akhiran") || file.name.includes("ending")) {
-        // Copy real ending cover image file from public/akhiran/ending.png
+      if (isEnding) {
         try {
-          const endingCoverPath = path.join(process.cwd(), "public", "akhiran", "ending.png");
-          const endingBuffer = await require("fs/promises").readFile(endingCoverPath);
+          const { readFile } = await import("fs/promises");
+          const endingBuffer = await readFile(path.join(process.cwd(), "public", "akhiran", "ending.png"));
           await writeFile(filePath, endingBuffer);
         } catch (e) {
           console.error("Failed to copy ending cover image:", e);
         }
       } else {
-        const buffer = Buffer.from(await file.arrayBuffer());
-        await writeFile(filePath, buffer);
+        await writeFile(filePath, Buffer.from(await file.arrayBuffer()));
       }
       savedFootageFilenames.push(filename);
     }
 
-    // 2. Save voice over file to disk inside tempDir
+    // 2. Save voiceover
     let savedVoFilename: string | null = null;
     if (voiceOverFile && voiceOverFile.size > 0) {
-      const buffer = Buffer.from(await voiceOverFile.arrayBuffer());
       savedVoFilename = "voiceover.mp3";
-      await writeFile(path.join(tempDir, savedVoFilename), buffer);
+      await writeFile(path.join(tempDir, savedVoFilename), Buffer.from(await voiceOverFile.arrayBuffer()));
     }
 
-    // 3. Save BGM file to disk inside tempDir (Uploaded file or Preset URL)
+    // 3. Save BGM
     let savedBgmFilename: string | null = null;
     if (bgmFile && bgmFile.size > 0) {
-      const buffer = Buffer.from(await bgmFile.arrayBuffer());
       savedBgmFilename = "bgm.mp3";
-      await writeFile(path.join(tempDir, savedBgmFilename), buffer);
+      await writeFile(path.join(tempDir, savedBgmFilename), Buffer.from(await bgmFile.arrayBuffer()));
     } else if (bgmUrl && bgmUrl.trim()) {
       try {
-        const cleanBgmPath = bgmUrl.startsWith("/") ? bgmUrl.slice(1) : bgmUrl;
-        const localBgmPath = path.join(process.cwd(), "public", cleanBgmPath);
-        const bgmBuffer = await require("fs/promises").readFile(localBgmPath);
+        const { readFile } = await import("fs/promises");
+        const cleanPath = bgmUrl.startsWith("/") ? bgmUrl.slice(1) : bgmUrl;
+        const bgmBuffer = await readFile(path.join(process.cwd(), "public", cleanPath));
         savedBgmFilename = "bgm.mp3";
         await writeFile(path.join(tempDir, savedBgmFilename), bgmBuffer);
       } catch (err) {
@@ -198,212 +147,79 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const subtitlesJson = (formData.get("subtitlesJson") as string) || "[]";
-    let subtitleChunksList: Array<{ text: string; start: number; end: number }> = [];
-    try {
-      subtitleChunksList = JSON.parse(subtitlesJson);
-    } catch { }
-
-    const footagesMetaJson = (formData.get("footagesMetaJson") as string) || "[]";
-    let footagesMetaList: Array<{ duration: number; startFromSec: number; colorGrade: string }> = [];
-    try {
-      footagesMetaList = JSON.parse(footagesMetaJson);
-    } catch { }
-
-    // DEBUG: Log all received data to diagnose preview vs export mismatch
-    console.log("[render-video] footageFiles received:", footageFiles.length, footageFiles.map(f => ({ name: f.name, size: f.size })));
-    console.log("[render-video] footagesMetaList:", JSON.stringify(footagesMetaList));
-    console.log("[render-video] clipDurationsList:", JSON.stringify(clipDurationsList));
-    console.log("[render-video] subtitleChunksList count:", subtitleChunksList.length);
-    console.log("[render-video] audioDurationSec:", audioDurationSec);
-
-    // 4. Construct composition footages and subtitles with exact studio preview metadata
+    // 4. Build footageItems with absolute file:// URLs
     const footageItems = savedFootageFilenames.map((fn, i) => {
       const meta = footagesMetaList[i] || {};
-      const dur = meta.duration || (clipDurationsList[i] && clipDurationsList[i] > 0 ? clipDurationsList[i] : defaultTrimSec);
+      const dur = meta.duration || (clipDurationsList[i] > 0 ? clipDurationsList[i] : defaultTrimSec);
       const startSec = meta.startFromSec !== undefined ? meta.startFromSec : (startFromSecList[i] || 0);
-      // Use absolute file:// URL so Remotion Chromium can read the file directly
-      // (required because bundle is cached without publicDir pointing to tempDir)
-      const absoluteUrl = `file://${path.join(tempDir, fn)}`;
-      console.log(`[render-video] clip[${i}]: file=${fn}, dur=${dur}s, startFromSec=${startSec}`);
       return {
-        url: absoluteUrl,
+        url: `file://${path.join(tempDir, fn)}`,
         duration: dur,
         startFromSec: startSec,
         colorGrade: meta.colorGrade || editingStyle,
       };
     });
 
+    // 5. Auto-generate subtitles from text if none provided
     if (subtitleChunksList.length === 0 && subtitleText.trim()) {
       const textChunks = splitTextIntoAutoCaptionChunks(subtitleText, 3);
       const voDuration = audioDurationSec > 0 ? audioDurationSec : footageItems.reduce((acc, f) => acc + f.duration, 0);
       const chunkDur = voDuration / Math.max(1, textChunks.length);
       for (let i = 0; i < textChunks.length; i++) {
-        subtitleChunksList.push({
-          text: textChunks[i],
-          start: i * chunkDur,
-          end: Math.min(voDuration, (i + 1) * chunkDur),
-        });
+        subtitleChunksList.push({ text: textChunks[i], start: i * chunkDur, end: Math.min(voDuration, (i + 1) * chunkDur) });
       }
     }
 
-    // ====================================================================
-    // PRE-TRIM FOOTAGE WITH FFMPEG
-    // Cut each video clip to exact timeline duration BEFORE Remotion renders.
-    // Uses explicit path detection to bypass Node.js PATH env var differences.
-    // ====================================================================
-    const ffmpegBin = _cachedFfmpegBin !== undefined ? _cachedFfmpegBin : await findFfmpeg();
-    if (_cachedFfmpegBin === undefined) _cachedFfmpegBin = ffmpegBin; // cache it
-
+    // 6. Pre-trim clips with ffmpeg (synchronous, before enqueueing)
+    // This runs before the response so ffmpeg is done before Remotion starts.
+    const ffmpegBin = await getCachedFfmpeg();
     if (ffmpegBin) {
-      console.log(`[render-video] Pre-trimming ${footageItems.length} clips with ffmpeg (sequential to avoid I/O races)...`);
-
       for (let i = 0; i < footageItems.length; i++) {
         const item = footageItems[i];
-        const fn = item.url;
+        if (/\.(png|jpe?g|webp|gif|bmp|tiff?)$/i.test(item.url)) continue;
 
-        // Skip images (png, jpg, webp, gif, bmp)
-        if (/\.(png|jpe?g|webp|gif|bmp|tiff?)$/i.test(fn)) {
-          console.log(`[render-video] clip[${i}] = image, skipping trim: ${fn}`);
-          continue;
-        }
-
-        const inputPath = path.join(tempDir, fn);
+        // Strip file:// to get real path for ffmpeg
+        const inputPath = item.url.replace(/^file:\/\//, "");
         const trimmedFn = `clip_${i}_trimmed.mp4`;
         const outputPath = path.join(tempDir, trimmedFn);
 
-        console.log(`[render-video] Trimming clip[${i}]: ${fn} → ${trimmedFn} (dur=${item.duration.toFixed(3)}s, start=${(item.startFromSec || 0).toFixed(3)}s)`);
-
-        const ok = await preTrimWithFfmpeg(
-          ffmpegBin,
-          inputPath,
-          outputPath,
-          item.startFromSec || 0,
-          item.duration
-        );
-
-        // After pre-trim, update url to absolute file:// path of trimmed clip
+        console.log(`[render-video] Trimming clip[${i}]: dur=${item.duration.toFixed(3)}s, start=${(item.startFromSec || 0).toFixed(3)}s`);
+        const ok = await preTrimWithFfmpeg(ffmpegBin, inputPath, outputPath, item.startFromSec || 0, item.duration);
         if (ok) {
           footageItems[i] = { ...item, url: `file://${outputPath}`, startFromSec: 0 };
-          console.log(`[render-video] clip[${i}] ✓ trimmed OK → ${trimmedFn}`);
-        } else {
-          console.warn(`[render-video] clip[${i}] ✗ trim FAILED, Remotion will use original: ${item.url}`);
+          console.log(`[render-video] clip[${i}] ✓ trimmed → ${trimmedFn}`);
         }
       }
-
-      console.log("[render-video] === Pre-trim complete ===");
-    } else {
-      console.warn("[render-video] ffmpeg NOT found at any known path — skipping pre-trim!");
     }
 
-    const exportPreset = (formData.get("exportPreset") as string) || "720p";
-    const aspectRatio = (formData.get("aspectRatio") as string) || "9:16";
-
-    // 5. Get cached Remotion bundle (built only once per server process)
-    // publicDir cannot be set at bundle time when caching — instead tempDir files
-    // are accessible because Remotion's dev server is pointed to the bundle output.
-    // Static media files (footages, voiceover, bgm) are referenced by filename and
-    // served by passing publicPath override or absolute paths to inputProps.
-    const serveUrl = await getOrBuildBundle();
-    console.log(`[render-video] Using bundle (cached=${_cachedServeUrl === serveUrl}): ${serveUrl}`);
-
-    // 6. Select Remotion composition & input props
-    // Use absolute file:// URLs for media so Chromium can load them
-    // regardless of where the bundle's publicDir points.
-    const inputProps = {
-      footages: footageItems, // already have file:// URLs
-      transitions: transitionsList,
-      subtitles: subtitleChunksList,
+    // 7. Enqueue job — returns immediately, render happens in background
+    enqueueJob(jobId, {
+      tempDir,
+      footageItems,
+      transitionsList,
+      subtitleChunksList,
       voiceOverUrl: savedVoFilename ? `file://${path.join(tempDir, savedVoFilename)}` : undefined,
       bgmUrl: savedBgmFilename ? `file://${path.join(tempDir, savedBgmFilename)}` : undefined,
-      bgmVolume: bgmVolume,
-      subtitleStyle: subtitleStyle,
-      subtitleFontSize: subtitleFontSize,
-      subtitleBottomPos: subtitleBottomPos,
-      clipDuration: defaultTrimSec,
-    };
-
-    const composition = await selectComposition({
-      serveUrl,
-      id: "MainComposition",
-      inputProps,
+      bgmVolume,
+      subtitleStyle,
+      subtitleFontSize,
+      subtitleBottomPos,
+      defaultTrimSec,
+      exportPreset,
+      aspectRatio,
     });
 
-    // Determine target width, height, and fps based on preset & aspect ratio
-    let targetWidth = 1080;
-    let targetHeight = 1920;
-    let targetFps = 60;
+    console.log(`[render-video] Job enqueued: ${jobId}`);
 
-    if (exportPreset === "720p") {
-      targetFps = 30;
-      if (aspectRatio === "9:16") { targetWidth = 720; targetHeight = 1280; }
-      else if (aspectRatio === "16:9") { targetWidth = 1280; targetHeight = 720; }
-      else { targetWidth = 720; targetHeight = 720; }
-    } else if (exportPreset === "480p") {
-      targetFps = 30;
-      if (aspectRatio === "9:16") { targetWidth = 480; targetHeight = 854; }
-      else if (aspectRatio === "16:9") { targetWidth = 854; targetHeight = 480; }
-      else { targetWidth = 480; targetHeight = 480; }
-    } else {
-      // 1080p FHD (60 FPS) default
-      targetFps = 60;
-      if (aspectRatio === "9:16") { targetWidth = 1080; targetHeight = 1920; }
-      else if (aspectRatio === "16:9") { targetWidth = 1920; targetHeight = 1080; }
-      else { targetWidth = 1080; targetHeight = 1080; }
-    }
-
-    composition.width = targetWidth;
-    composition.height = targetHeight;
-    composition.fps = targetFps;
-
-    // Compute total composition frames using EXACT same integer accumulation as VideoTracks.tsx
-    // This prevents any clip boundary drift between preview and render
-    let totalFrames = 0;
-    for (const f of footageItems) {
-      const durationSec = f.duration || defaultTrimSec || 3;
-      totalFrames += Math.max(1, Math.round(durationSec * targetFps));
-    }
-    composition.durationInFrames = Math.max(targetFps, totalFrames);
-    console.log(`[render-video] composition: totalFrames=${totalFrames}, fps=${targetFps}, duration=${(totalFrames / targetFps).toFixed(2)}s`);
-
-    // 7. Render MP4 video via Remotion renderer (Optimized for 2 vCPU VPS)
-    const finalVideoPath = path.join(tempDir, "final_export.mp4");
-    console.log(`[render-video] Starting Chromium rendering for ${composition.durationInFrames} frames...`);
-    await renderMedia({
-      composition,
-      serveUrl,
-      codec: "h264",
-      outputLocation: finalVideoPath,
-      inputProps,
-      concurrency: 2, // Manfaatkan 2 vCPU untuk render 2x lebih cepat
-      chromiumOptions: {
-        enableMultiProcessOnLinux: true,
-      },
-      onProgress: ({ renderedFrames }) => {
-        const percent = Math.round((renderedFrames / composition.durationInFrames) * 100);
-        if (renderedFrames % 60 === 0 || renderedFrames === composition.durationInFrames) {
-          console.log(`[render-video] 🎬 Rendering: ${percent}% (${renderedFrames}/${composition.durationInFrames} frames)`);
-        }
-      },
+    return NextResponse.json({
+      jobId,
+      message: "Render job diterima! Polling /api/render-status/" + jobId + " untuk progress.",
     });
-    console.log(`[render-video] ✓ Render finished successfully! Sending MP4 file to client.`);
 
-    const videoBuffer = await require("fs/promises").readFile(finalVideoPath);
-
-    // Cleanup temp directory in background
-    rm(tempDir, { recursive: true, force: true }).catch(() => { });
-
-    return new NextResponse(videoBuffer, {
-      headers: {
-        "Content-Type": "video/mp4",
-        "Content-Disposition": `attachment; filename="AutoVideo_${Date.now()}.mp4"`,
-      },
-    });
   } catch (error: any) {
-    console.error("Remotion video render error:", error);
-    rm(tempDir, { recursive: true, force: true }).catch(() => { });
+    console.error("[render-video] Failed to enqueue job:", error);
     return NextResponse.json(
-      { error: error.message || "Gagal merender video ekspor Remotion." },
+      { error: error.message || "Gagal memulai render job." },
       { status: 500 }
     );
   }
