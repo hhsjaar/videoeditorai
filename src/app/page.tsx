@@ -212,49 +212,67 @@ export default function CapCutWebStudio() {
     scrollToBottomChat();
   }, [chatMessages, isChatSending]);
 
-  // ─── Capture thumbnail dari footage (canvas) ─────────────────────────────────
-  const captureFootageThumbnail = (footage: UploadedFootage): Promise<string | null> => {
+  // ─── Capture multiple frames dari footage (canvas) ───────────────────────────
+  // Returns array of base64 frames: 1 frame for image, 3 frames for video
+  const captureFootageFrames = (footage: UploadedFootage): Promise<string[]> => {
     return new Promise((resolve) => {
       const isImage = /\.(png|jpe?g|webp|gif|bmp|heic|heif)$/i.test(footage.name) ||
-        footage.previewUrl.startsWith("blob:") && footage.file.type.startsWith("image/");
+        footage.file.type.startsWith("image/");
 
-      const canvas = document.createElement("canvas");
-      canvas.width = 320;
-      canvas.height = 180;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) { resolve(null); return; }
-
-      const toBase64 = () => {
-        try { return canvas.toDataURL("image/jpeg", 0.7); } catch { return null; }
+      const drawToBase64 = (el: HTMLImageElement | HTMLVideoElement): string | null => {
+        const canvas = document.createElement("canvas");
+        canvas.width = 384;
+        canvas.height = 216;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return null;
+        try {
+          ctx.drawImage(el, 0, 0, 384, 216);
+          return canvas.toDataURL("image/jpeg", 0.75);
+        } catch { return null; }
       };
 
-      if (isImage || footage.file.type.startsWith("image/")) {
+      if (isImage) {
         const img = new Image();
         img.crossOrigin = "anonymous";
         img.onload = () => {
-          ctx.drawImage(img, 0, 0, 320, 180);
-          resolve(toBase64());
+          const b64 = drawToBase64(img);
+          resolve(b64 ? [b64] : []);
         };
-        img.onerror = () => resolve(null);
+        img.onerror = () => resolve([]);
         img.src = footage.previewUrl;
       } else {
-        // video — seek to 1s then capture frame
+        // Video — capture 3 frames at 10%, 40%, 70% of duration
         const vid = document.createElement("video");
         vid.crossOrigin = "anonymous";
         vid.muted = true;
         vid.preload = "metadata";
         vid.src = footage.previewUrl;
-        const timeout = setTimeout(() => { vid.src = ""; resolve(null); }, 5000);
-        vid.onloadedmetadata = () => {
-          vid.currentTime = Math.min(1.0, (vid.duration || 0) * 0.25);
+
+        const frames: string[] = [];
+        const seekPoints = [0.1, 0.4, 0.7];
+        let seekIdx = 0;
+
+        const timeout = setTimeout(() => { vid.src = ""; resolve(frames); }, 8000);
+
+        const seekNext = () => {
+          if (seekIdx >= seekPoints.length) {
+            clearTimeout(timeout);
+            vid.src = "";
+            resolve(frames);
+            return;
+          }
+          const t = Math.max(0.1, (vid.duration || 5) * seekPoints[seekIdx]);
+          vid.currentTime = t;
+          seekIdx++;
         };
+
+        vid.onloadedmetadata = seekNext;
         vid.onseeked = () => {
-          clearTimeout(timeout);
-          ctx.drawImage(vid, 0, 0, 320, 180);
-          vid.src = "";
-          resolve(toBase64());
+          const b64 = drawToBase64(vid);
+          if (b64) frames.push(b64);
+          seekNext();
         };
-        vid.onerror = () => { clearTimeout(timeout); resolve(null); };
+        vid.onerror = () => { clearTimeout(timeout); resolve(frames); };
       }
     });
   };
@@ -270,17 +288,19 @@ export default function CapCutWebStudio() {
       const script = polishedScript || rawScript;
       const footageNames = footages.map(f => f.name);
 
-      // Capture thumbnails for Gemini Vision analysis
-      setChatMessages(prev => [...prev, { sender: "ai", text: "🔍 Menganalisis konten visual setiap klip dengan Gemini Vision..." }]);
-      const thumbnails: (string | null)[] = await Promise.all(
-        footages.map(f => captureFootageThumbnail(f))
+      // Capture multi-frame thumbnails for Gemini Vision analysis
+      setChatMessages(prev => [...prev, { sender: "ai", text: "🔍 Menganalisis konten visual setiap klip dengan Gemini Vision (multi-frame)..." }]);
+      const frameArrays: string[][] = await Promise.all(
+        footages.map(f => captureFootageFrames(f))
       );
-      const validThumbnails = thumbnails.every(t => t !== null) ? thumbnails as string[] : undefined;
+      // Only send if all clips have at least 1 frame
+      const validFrameArrays = frameArrays.every(arr => arr.length > 0) ? frameArrays : undefined;
+
 
       const res = await fetch("/api/match-footage", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ script, wordTimings, footageNames, audioDurationSec, thumbnails: validThumbnails }),
+        body: JSON.stringify({ script, wordTimings, footageNames, audioDurationSec, frameArrays: validFrameArrays }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -327,6 +347,20 @@ export default function CapCutWebStudio() {
     const newDurMap: { [key: number]: number } = {};
     preMatchFootageOrder.forEach((f, i) => { newDurMap[i] = f.duration; });
     setCustomClipDurations(newDurMap);
+  };
+
+  // ─── Helper: Cover Akhiran selalu pakai flash-white ─────────────────────────
+  // Dipanggil setelah setiap perubahan transitionsMap agar transisi sebelum
+  // Cover Akhiran tidak pernah diubah oleh perintah apapun.
+  const ensureEndingTransition = (map: { [key: number]: string }, clips: typeof footages): { [key: number]: string } => {
+    const endingIdx = clips.findIndex(f =>
+      f.name.includes("Cover Akhiran") || f.name.includes("Akhiran") || f.name.includes("ending")
+    );
+    if (endingIdx > 0) {
+      // Transition SEBELUM Cover Akhiran = posisi endingIdx - 1
+      return { ...map, [endingIdx - 1]: "flash-white" };
+    }
+    return map;
   };
 
   // ─── AI Copilot Enhanced Action Handler (Fitur 3) ───────────────────────────
@@ -407,23 +441,32 @@ export default function CapCutWebStudio() {
         const keys = AVAILABLE_TRANSITIONS.map(t => t.id);
         const newMap: { [key: number]: string } = {};
         footages.forEach((_, i) => { if (i < footages.length - 1) newMap[i] = keys[Math.floor(Math.random() * keys.length)]; });
-        setTransitionsMap(newMap);
-        desc = "Transisi acak terpasang di semua klip";
+        setTransitionsMap(ensureEndingTransition(newMap, footages));
+        desc = "Transisi acak terpasang di semua klip (Cover Akhiran tetap Flash White)";
       } else {
         const newMap: { [key: number]: string } = {};
         footages.forEach((_, i) => { if (i < footages.length - 1) newMap[i] = targetType; });
-        setTransitionsMap(newMap);
-        desc = `Transisi ${targetType} terpasang di semua klip`;
+        setTransitionsMap(ensureEndingTransition(newMap, footages));
+        desc = `Transisi ${targetType} terpasang di semua klip (Cover Akhiran tetap Flash White)`;
       }
     } else if (act.type === "add_random_transitions") {
       const keys = AVAILABLE_TRANSITIONS.map(t => t.id);
       const newMap: { [key: number]: string } = {};
       footages.forEach((_, i) => { if (i < footages.length - 1) newMap[i] = keys[Math.floor(Math.random() * keys.length)]; });
-      setTransitionsMap(newMap);
-      desc = "Transisi acak variatif terpasang";
+      setTransitionsMap(ensureEndingTransition(newMap, footages));
+      desc = "Transisi acak variatif terpasang (Cover Akhiran tetap Flash White)";
     } else if (act.type === "remove_all_transitions") {
-      setTransitionsMap({});
-      desc = "Semua transisi dihapus";
+      // Remove all EXCEPT the transition before Cover Akhiran
+      const endingIdx = footages.findIndex(f =>
+        f.name.includes("Cover Akhiran") || f.name.includes("Akhiran") || f.name.includes("ending")
+      );
+      if (endingIdx > 0) {
+        setTransitionsMap({ [endingIdx - 1]: "flash-white" });
+        desc = "Semua transisi dihapus (kecuali Flash White sebelum Cover Akhiran)";
+      } else {
+        setTransitionsMap({});
+        desc = "Semua transisi dihapus";
+      }
     } else if (act.type === "reorder_clips") {
       const order: number[] = act.payload.order || [];
       if (order.length > 0) {
@@ -1042,8 +1085,10 @@ export default function CapCutWebStudio() {
     for (let i = 0; i < footages.length - 1; i++) {
       newMap[i] = transitionId;
     }
-    setTransitionsMap(newMap);
+    // Cover Akhiran always stays flash-white
+    setTransitionsMap(ensureEndingTransition(newMap, footages));
   };
+
 
   // Polish Script API
   const handlePolishScript = async () => {
