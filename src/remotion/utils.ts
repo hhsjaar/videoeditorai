@@ -6,8 +6,7 @@ export const resolveMediaSrc = (src: string | undefined): string | undefined => 
     src.startsWith("http://") ||
     src.startsWith("https://") ||
     src.startsWith("blob:") ||
-    src.startsWith("data:") ||
-    src.startsWith("file://") // absolute path — used when bundle is cached (no publicDir per-request)
+    src.startsWith("data:")
   ) {
     return src;
   }

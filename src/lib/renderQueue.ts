@@ -19,6 +19,7 @@ import { promisify } from "util";
 const execAsync = promisify(exec);
 
 // ─── Constants ────────────────────────────────────────────────────────────────
+// Rendered output MP4 files go here (separate from per-job temp upload dirs)
 const OUTPUT_DIR = path.join(process.cwd(), "tmp", "render-output");
 const CLEANUP_AFTER_MS = 2 * 60 * 60 * 1000; // 2 hours
 const CLEANUP_INTERVAL_MS = 30 * 60 * 1000;   // check every 30 min

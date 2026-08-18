@@ -43,3 +43,7 @@ next-env.d.ts
 # temp files
 /tmp/
 *.mp4
+
+# Render temp files (served by Next.js, cleaned up after render)
+public/render-tmp/
+tmp/render-output/

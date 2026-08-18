@@ -60,7 +60,12 @@ function splitTextIntoAutoCaptionChunks(text: string, wordsPerChunk = 3): string
 // Download via GET /api/render-download/[jobId] when done.
 export async function POST(req: NextRequest) {
   const jobId = randomUUID();
-  const tempDir = path.join(process.cwd(), "tmp", `remotion_${jobId}`);
+  // Files must be served via HTTP — Remotion's proxy does NOT support file:// URLs.
+  // Save to public/render-tmp/<jobId>/ so Next.js serves them at /render-tmp/<jobId>/...
+  const PORT = process.env.PORT || "3000";
+  const publicBase = `/render-tmp/${jobId}`;
+  const tempDir = path.join(process.cwd(), "public", "render-tmp", jobId);
+  const toHttpUrl = (filename: string) => `http://localhost:${PORT}/render-tmp/${jobId}/${filename}`;
 
   try {
     await mkdir(tempDir, { recursive: true });
@@ -147,13 +152,13 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 4. Build footageItems with absolute file:// URLs
+    // 4. Build footageItems with http:// URLs served by Next.js static server
     const footageItems = savedFootageFilenames.map((fn, i) => {
       const meta = footagesMetaList[i] || {};
       const dur = meta.duration || (clipDurationsList[i] > 0 ? clipDurationsList[i] : defaultTrimSec);
       const startSec = meta.startFromSec !== undefined ? meta.startFromSec : (startFromSecList[i] || 0);
       return {
-        url: `file://${path.join(tempDir, fn)}`,
+        url: toHttpUrl(fn),
         duration: dur,
         startFromSec: startSec,
         colorGrade: meta.colorGrade || editingStyle,
@@ -171,22 +176,22 @@ export async function POST(req: NextRequest) {
     }
 
     // 6. Pre-trim clips with ffmpeg (synchronous, before enqueueing)
-    // This runs before the response so ffmpeg is done before Remotion starts.
     const ffmpegBin = await getCachedFfmpeg();
     if (ffmpegBin) {
       for (let i = 0; i < footageItems.length; i++) {
         const item = footageItems[i];
         if (/\.(png|jpe?g|webp|gif|bmp|tiff?)$/i.test(item.url)) continue;
 
-        // Strip file:// to get real path for ffmpeg
-        const inputPath = item.url.replace(/^file:\/\//, "");
+        // Derive real filesystem path from http URL
+        const filename = item.url.split("/").pop()!;
+        const inputPath = path.join(tempDir, filename);
         const trimmedFn = `clip_${i}_trimmed.mp4`;
         const outputPath = path.join(tempDir, trimmedFn);
 
         console.log(`[render-video] Trimming clip[${i}]: dur=${item.duration.toFixed(3)}s, start=${(item.startFromSec || 0).toFixed(3)}s`);
         const ok = await preTrimWithFfmpeg(ffmpegBin, inputPath, outputPath, item.startFromSec || 0, item.duration);
         if (ok) {
-          footageItems[i] = { ...item, url: `file://${outputPath}`, startFromSec: 0 };
+          footageItems[i] = { ...item, url: toHttpUrl(trimmedFn), startFromSec: 0 };
           console.log(`[render-video] clip[${i}] ✓ trimmed → ${trimmedFn}`);
         }
       }
@@ -198,8 +203,8 @@ export async function POST(req: NextRequest) {
       footageItems,
       transitionsList,
       subtitleChunksList,
-      voiceOverUrl: savedVoFilename ? `file://${path.join(tempDir, savedVoFilename)}` : undefined,
-      bgmUrl: savedBgmFilename ? `file://${path.join(tempDir, savedBgmFilename)}` : undefined,
+      voiceOverUrl: savedVoFilename ? toHttpUrl(savedVoFilename) : undefined,
+      bgmUrl: savedBgmFilename ? toHttpUrl(savedBgmFilename) : undefined,
       bgmVolume,
       subtitleStyle,
       subtitleFontSize,
