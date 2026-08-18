@@ -152,6 +152,18 @@ export default function CapCutWebStudio() {
   // Word-level timestamps from TTS alignment (word -> start/end time in seconds)
   const [wordTimings, setWordTimings] = useState<Array<{word: string; start: number; end: number}>>([]);
 
+  // Target duration & additional instructions (Fitur 2)
+  const [targetDuration, setTargetDuration] = useState<number>(0); // 0 = no target
+  const [additionalInstructions, setAdditionalInstructions] = useState<string>("");
+
+  // Footage semantic match state (Fitur 4)
+  const [isMatchingFootage, setIsMatchingFootage] = useState<boolean>(false);
+  const [preMatchFootageOrder, setPreMatchFootageOrder] = useState<UploadedFootage[] | null>(null); // for undo
+  const [matchExplanation, setMatchExplanation] = useState<string>("");
+
+  // AI Copilot confirmation modal for heavy actions (Fitur 3)
+  const [copilotConfirm, setCopilotConfirm] = useState<{ message: string; action: any } | null>(null);
+
   // Transitions state
   const [transitionsMap, setTransitionsMap] = useState<{ [afterIndex: number]: string }>({});
 
@@ -200,6 +212,156 @@ export default function CapCutWebStudio() {
     scrollToBottomChat();
   }, [chatMessages, isChatSending]);
 
+  // ─── Footage Semantic Matching (Fitur 4) ────────────────────────────────────
+  const handleAutoMatchFootage = async () => {
+    if (!audioUrl || footages.length < 2) {
+      alert("Auto-match membutuhkan VO yang sudah digenerate dan minimal 2 klip footage.");
+      return;
+    }
+    setIsMatchingFootage(true);
+    try {
+      const script = polishedScript || rawScript;
+      const footageNames = footages.map(f => f.name);
+      const res = await fetch("/api/match-footage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ script, wordTimings, footageNames, audioDurationSec }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+
+      const { orderedIndices, clipTimings, explanation } = data;
+
+      // Save current order for undo
+      setPreMatchFootageOrder([...footages]);
+      setMatchExplanation(explanation || "");
+
+      // Reorder footages
+      const reordered = orderedIndices
+        .map((idx: number) => footages[idx])
+        .filter(Boolean) as UploadedFootage[];
+      setFootages(reordered);
+
+      // Apply clip timings as durations
+      const newDurMap: { [key: number]: number } = {};
+      clipTimings.forEach((t: any, pos: number) => {
+        newDurMap[pos] = parseFloat((t.endSec - t.startSec).toFixed(2));
+      });
+      setCustomClipDurations(newDurMap);
+
+      setChatMessages(prev => [...prev, {
+        sender: "ai",
+        text: `✨ Auto-Match selesai! ${explanation}\n\nKlip sudah disusun ulang sesuai narasi. Gunakan tombol "Undo Match" jika ingin balik ke urutan semula.`,
+      }]);
+    } catch (e: any) {
+      alert(e.message || "Gagal melakukan auto-match footage.");
+    } finally {
+      setIsMatchingFootage(false);
+    }
+  };
+
+  const handleUndoMatch = () => {
+    if (!preMatchFootageOrder) return;
+    setFootages(preMatchFootageOrder);
+    setPreMatchFootageOrder(null);
+    setMatchExplanation("");
+    // Restore durations
+    const newDurMap: { [key: number]: number } = {};
+    preMatchFootageOrder.forEach((f, i) => { newDurMap[i] = f.duration; });
+    setCustomClipDurations(newDurMap);
+  };
+
+  // ─── AI Copilot Enhanced Action Handler (Fitur 3) ───────────────────────────
+  const executeCopilotAction = async (act: any): Promise<string> => {
+    let desc = "";
+    if (act.type === "change_bgm_volume") {
+      setBgmVolume(act.payload.volume);
+      desc = `Volume BGM diubah ke ${Math.round(act.payload.volume * 100)}%`;
+    } else if (act.type === "change_subtitle_style") {
+      setSubtitleStyle(act.payload.style);
+      desc = `Subtitle diubah ke gaya ${act.payload.style}`;
+    } else if (act.type === "change_subtitle_font_size") {
+      const sz = parseInt(act.payload.fontSize || 56);
+      setSubtitleFontSize(sz);
+      desc = `Ukuran subtitle diubah ke ${sz}px`;
+    } else if (act.type === "change_subtitle_position") {
+      const pos = parseInt(act.payload.bottom || 220);
+      setSubtitleBottomPos(pos);
+      desc = `Posisi subtitle diubah ke ${pos}px`;
+    } else if (act.type === "change_editing_style") {
+      setEditingStyle(act.payload.style);
+      desc = `Color filter diubah ke ${act.payload.style}`;
+    } else if (act.type === "change_clip_duration") {
+      setClipDuration(act.payload.duration);
+      desc = `Durasi klip diubah ke ${act.payload.duration}s`;
+    } else if (act.type === "set_clip_duration") {
+      const idx = act.payload.clipIndex;
+      setCustomClipDurations(prev => ({ ...prev, [idx]: act.payload.duration }));
+      desc = `Durasi klip ${idx + 1} diubah ke ${act.payload.duration}s`;
+    } else if (act.type === "set_target_duration") {
+      setTargetDuration(act.payload.seconds);
+      desc = `Target durasi video diset ke ${act.payload.seconds}s`;
+    } else if (act.type === "change_aspect_ratio") {
+      setAspectRatio(act.payload.ratio);
+      desc = `Rasio aspek diubah ke ${act.payload.ratio}`;
+    } else if (act.type === "change_export_preset") {
+      setExportPreset(act.payload.preset);
+      desc = `Preset export diubah ke ${act.payload.preset}`;
+    } else if (act.type === "change_bgm") {
+      const track = PRESET_VIRAL_BGM_TRACKS.find(t => t.id === act.payload.trackId);
+      if (track) { setBgmUrl(track.url); setBgmFile(null); }
+      desc = `BGM diganti ke ${act.payload.trackId}`;
+    } else if (act.type === "add_all_transitions") {
+      const targetType = act.payload.type || "light-leak";
+      if (targetType === "random") {
+        const keys = AVAILABLE_TRANSITIONS.map(t => t.id);
+        const newMap: { [key: number]: string } = {};
+        footages.forEach((_, i) => { if (i < footages.length - 1) newMap[i] = keys[Math.floor(Math.random() * keys.length)]; });
+        setTransitionsMap(newMap);
+        desc = "Transisi acak terpasang di semua klip";
+      } else {
+        const newMap: { [key: number]: string } = {};
+        footages.forEach((_, i) => { if (i < footages.length - 1) newMap[i] = targetType; });
+        setTransitionsMap(newMap);
+        desc = `Transisi ${targetType} terpasang di semua klip`;
+      }
+    } else if (act.type === "add_random_transitions") {
+      const keys = AVAILABLE_TRANSITIONS.map(t => t.id);
+      const newMap: { [key: number]: string } = {};
+      footages.forEach((_, i) => { if (i < footages.length - 1) newMap[i] = keys[Math.floor(Math.random() * keys.length)]; });
+      setTransitionsMap(newMap);
+      desc = "Transisi acak variatif terpasang";
+    } else if (act.type === "remove_all_transitions") {
+      setTransitionsMap({});
+      desc = "Semua transisi dihapus";
+    } else if (act.type === "reorder_clips") {
+      const order: number[] = act.payload.order || [];
+      if (order.length > 0) {
+        const reordered = order.map((i: number) => footages[i]).filter(Boolean);
+        setFootages(reordered);
+        const newDurMap: { [key: number]: number } = {};
+        reordered.forEach((_, i) => { newDurMap[i] = customClipDurations[order[i]] || clipDuration; });
+        setCustomClipDurations(newDurMap);
+        desc = `Klip disusun ulang sesuai urutan: ${order.map(i => i + 1).join(", ")}`;
+      }
+    } else if (act.type === "change_voice") {
+      setSelectedVoice(act.payload.voice);
+      desc = `Suara VO diganti ke ${act.payload.voice} — klik Generate VO untuk menghasilkan ulang`;
+    } else if (act.type === "regenerate_voiceover") {
+      if (act.payload.voice) setSelectedVoice(act.payload.voice);
+      if (act.payload.script) setPolishedScript(act.payload.script);
+      await handleGenerateAudio();
+      desc = `VO di-generate ulang${act.payload.voice ? " dengan suara " + act.payload.voice : ""}`;
+    } else if (act.type === "auto_match_footage") {
+      await handleAutoMatchFootage();
+      desc = "Auto-match footage ke VO dijalankan";
+    } else if (act.type === "regenerate_render") {
+      desc = "Render ulang akan dimulai...";
+      setTimeout(() => handleExportVideo(), 500);
+    }
+    return desc;
+  };
+
   const handleSendChatMessage = async (overridePrompt?: string) => {
     const promptText = (overridePrompt || chatInput).trim();
     if (!promptText || isChatSending) return;
@@ -216,82 +378,59 @@ export default function CapCutWebStudio() {
           prompt: promptText,
           context: {
             footagesCount: footages.length,
+            clips: footages.map((f, i) => ({ name: f.name, duration: customClipDurations[i] || clipDuration })),
             totalDuration: totalVideoDurationSec,
+            audioDurationSec,
             selectedVoice,
             rawScript,
             polishedScript,
             subtitleStyle,
             subtitleFontSize,
+            subtitleBottomPos,
             editingStyle,
             transitionsMap,
             bgmUrl,
             bgmVolume,
+            targetDuration,
+            aspectRatio,
+            exportPreset,
           },
         }),
       });
 
       const data = await res.json();
       if (data.message) {
-        let actionDesc = "";
-        if (data.actions && Array.isArray(data.actions)) {
-          data.actions.forEach((act: any) => {
-            if (act.type === "change_bgm_volume") {
-              setBgmVolume(act.payload.volume);
-              actionDesc = `Volume BGM diubah ke ${Math.round(act.payload.volume * 100)}%`;
-            } else if (act.type === "change_subtitle_style") {
-              setSubtitleStyle(act.payload.style);
-              actionDesc = `Subtitle diubah ke gaya ${act.payload.style}`;
-            } else if (act.type === "change_subtitle_font_size") {
-              const sz = parseInt(act.payload.fontSize || 56);
-              setSubtitleFontSize(sz);
-              actionDesc = `Ukuran subtitle diubah ke ${sz}px`;
-            } else if (act.type === "change_subtitle_position") {
-              const pos = parseInt(act.payload.bottom || 220);
-              setSubtitleBottomPos(pos);
-              actionDesc = `Posisi vertikal subtitle diubah ke ${pos}px`;
-            } else if (act.type === "change_editing_style") {
-              setEditingStyle(act.payload.style);
-              actionDesc = `Color filter diubah ke ${act.payload.style}`;
-            } else if (act.type === "change_clip_duration") {
-              setClipDuration(act.payload.duration);
-              actionDesc = `Durasi klip diubah ke ${act.payload.duration}s`;
-            } else if (act.type === "add_all_transitions") {
-              const targetType = act.payload.type || "light-leak";
-              if (targetType === "random" || targetType === "varied" || targetType === "berbeda") {
-                const transitionKeys = AVAILABLE_TRANSITIONS.map((t) => t.id);
-                const newMap: { [key: number]: string } = {};
-                footages.forEach((_, i) => {
-                  if (i < footages.length - 1) {
-                    const randomT = transitionKeys[Math.floor(Math.random() * transitionKeys.length)];
-                    newMap[i] = randomT;
-                  }
-                });
-                setTransitionsMap(newMap);
-                actionDesc = `Variasi transisi acak berbeda-beda terpasang pada semua klip`;
-              } else {
-                const newMap: { [key: number]: string } = {};
-                footages.forEach((_, i) => {
-                  if (i < footages.length - 1) newMap[i] = targetType;
-                });
-                setTransitionsMap(newMap);
-                actionDesc = `Transisi ${targetType} terpasang pada semua klip`;
-              }
-            } else if (act.type === "add_random_transitions") {
-              const transitionKeys = AVAILABLE_TRANSITIONS.map((t) => t.id);
-              const newMap: { [key: number]: string } = {};
-              footages.forEach((_, i) => {
-                if (i < footages.length - 1) {
-                  const randomT = transitionKeys[Math.floor(Math.random() * transitionKeys.length)];
-                  newMap[i] = randomT;
-                }
-              });
-              setTransitionsMap(newMap);
-              actionDesc = `Variasi transisi acak berbeda-beda terpasang pada semua klip`;
-            } else if (act.type === "remove_all_transitions") {
-              setTransitionsMap({});
-              actionDesc = "Semua transisi dihapus";
-            }
-          });
+        // Check if any action requires confirmation
+        const heavyActions = (data.actions || []).filter((a: any) =>
+          ["regenerate_voiceover", "reorder_clips", "auto_match_footage", "regenerate_render", "change_voice"].includes(a.type)
+        );
+        const lightActions = (data.actions || []).filter((a: any) =>
+          !["regenerate_voiceover", "reorder_clips", "auto_match_footage", "regenerate_render", "change_voice"].includes(a.type)
+        );
+
+        // Execute light actions immediately
+        const lightDescs: string[] = [];
+        for (const act of lightActions) {
+          const d = await executeCopilotAction(act);
+          if (d) lightDescs.push(d);
+        }
+
+        // For heavy actions, if requiresConfirmation is true, show confirmation
+        const actionDescs = [...lightDescs];
+        if (heavyActions.length > 0 && data.requiresConfirmation !== false) {
+          // Queue heavy actions for confirmation
+          for (const act of heavyActions) {
+            setCopilotConfirm({
+              message: `AI ingin melakukan: **${act.type.replace(/_/g, " ")}**\n\n${data.message}`,
+              action: act,
+            });
+          }
+        } else {
+          // Execute all (requiresConfirmation was explicitly false)
+          for (const act of heavyActions) {
+            const d = await executeCopilotAction(act);
+            if (d) actionDescs.push(d);
+          }
         }
 
         setChatMessages((prev) => [
@@ -299,7 +438,7 @@ export default function CapCutWebStudio() {
           {
             sender: "ai",
             text: data.message,
-            actionApplied: actionDesc || undefined,
+            actionApplied: actionDescs.join(" | ") || undefined,
           },
         ]);
       }
@@ -967,6 +1106,18 @@ export default function CapCutWebStudio() {
       formData.append("exportPreset", exportPreset);
       formData.append("aspectRatio", aspectRatio);
 
+      // Target duration — if set and > VO, clips will be extended proportionally
+      if (targetDuration > 0) {
+        if (audioDurationSec > 0 && targetDuration < audioDurationSec - 0.5) {
+          const ok = window.confirm(
+            `Peringatan: Target durasi (${targetDuration}s) lebih pendek dari durasi VO (${audioDurationSec.toFixed(1)}s).\n\nVO akan tetap diputar penuh. Target durasi diabaikan.\n\nLanjutkan render?`
+          );
+          if (!ok) { setIsExporting(false); return; }
+        } else {
+          formData.append("targetDuration", targetDuration.toString());
+        }
+      }
+
       const transitionsList: TransitionItem[] = [];
       Object.keys(transitionsMap).forEach((afterIdx) => {
         transitionsList.push({
@@ -1477,6 +1628,48 @@ export default function CapCutWebStudio() {
               </div>
             </div>
 
+            {/* STEP 5: TARGET DURATION & ADDITIONAL INSTRUCTIONS (Fitur 2) */}
+            <div className="space-y-3 pt-2">
+              <label className="text-xs font-black text-sky-400 flex items-center gap-2 tracking-wider">
+                <span className="w-5 h-5 rounded-full bg-sky-600/30 border border-sky-500/40 text-sky-300 flex items-center justify-center text-[10px]">5</span>
+                INSTRUKSI TAMBAHAN (Opsional)
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <span className="text-[10px] font-bold text-slate-400">⏱️ Target Durasi Video</span>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      min="5"
+                      max="300"
+                      step="5"
+                      value={targetDuration || ""}
+                      onChange={(e) => setTargetDuration(parseFloat(e.target.value) || 0)}
+                      placeholder="cth: 30"
+                      className="w-full px-3 py-2 pr-10 bg-[#09090b] border border-[#27272a] rounded-xl text-xs text-slate-200 placeholder-slate-500 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500/30"
+                    />
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] text-slate-500">detik</span>
+                  </div>
+                  {targetDuration > 0 && audioDurationSec > 0 && targetDuration < audioDurationSec - 0.5 && (
+                    <p className="text-[9px] text-amber-400">⚠️ Target ({targetDuration}s) lebih pendek dari VO ({audioDurationSec.toFixed(0)}s)</p>
+                  )}
+                  {targetDuration > 0 && audioDurationSec > 0 && targetDuration > audioDurationSec + 0.5 && (
+                    <p className="text-[9px] text-sky-400">✓ Klip akan dipanjangkan {(targetDuration - audioDurationSec).toFixed(0)}s tanpa VO</p>
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  <span className="text-[10px] font-bold text-slate-400">📝 Catatan ke AI</span>
+                  <textarea
+                    value={additionalInstructions}
+                    onChange={(e) => setAdditionalInstructions(e.target.value)}
+                    placeholder="cth: buat tone lebih fun, tambah emosi dramatis..."
+                    rows={3}
+                    className="w-full px-3 py-2 bg-[#09090b] border border-[#27272a] rounded-xl text-[10px] text-slate-200 placeholder-slate-500 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500/30 resize-none"
+                  />
+                </div>
+              </div>
+            </div>
+
             {/* HERO FLOATING GENERATE BUTTON */}
             <button
               onClick={handleGenerateConceptVideo}
@@ -1485,6 +1678,7 @@ export default function CapCutWebStudio() {
               <Sparkles className="w-5 h-5 text-amber-300 animate-bounce" />
               <span>GENERATE VIDEO KONSEP & BUKA STUDIO WORKSPACE</span>
             </button>
+
           </div>
         </div>
       ) : (
@@ -1770,6 +1964,68 @@ export default function CapCutWebStudio() {
                 {/* TAB: AUDIO & BGM MUSIC LIBRARY */}
                 {activeNavTab === "audio" && (
                   <div className="space-y-3">
+                    {/* ── Voice Over Switcher (Fitur 1) ── */}
+                    <div className="p-2.5 rounded-xl bg-[#09090b] border border-violet-900/40 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-violet-300">🎙️ Suara Voice Over</span>
+                        <button
+                          onClick={handleGenerateAudio}
+                          disabled={isGeneratingAudio || (!polishedScript && !rawScript)}
+                          className="px-2 py-1 text-[9px] bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white rounded font-bold flex items-center gap-1 shadow cursor-pointer disabled:opacity-40"
+                        >
+                          <RefreshCw className={`w-3 h-3 ${isGeneratingAudio ? "animate-spin" : ""}`} />
+                          {isGeneratingAudio ? "Generating..." : "Regen VO"}
+                        </button>
+                      </div>
+                      <div className="space-y-1">
+                        {VOICE_OPTIONS.map((v) => (
+                          <button
+                            key={v.id}
+                            onClick={() => setSelectedVoice(v.id)}
+                            className={`w-full px-2.5 py-2 rounded-lg text-left transition-all border cursor-pointer ${
+                              selectedVoice === v.id
+                                ? "border-violet-500 bg-violet-950/40 ring-1 ring-violet-500/30"
+                                : "border-[#27272a] bg-[#18181b] hover:border-slate-600"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-slate-200 text-[11px]">{v.name}</span>
+                              {selectedVoice === v.id && <Check className="w-3 h-3 text-violet-400" />}
+                            </div>
+                            <p className="text-[9px] text-slate-400 mt-0.5">{v.desc}</p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* ── Auto Match Footage to VO (Fitur 4) ── */}
+                    <div className="p-2.5 rounded-xl bg-[#09090b] border border-amber-900/40 space-y-2">
+                      <span className="text-xs font-bold text-amber-300">🎯 Sinkronisasi Footage ke Narasi</span>
+                      <p className="text-[9px] text-slate-400">AI mengurutkan klip footage agar sinkron dengan narasi VO.</p>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={handleAutoMatchFootage}
+                          disabled={isMatchingFootage || !audioUrl || footages.length < 2}
+                          className="flex-1 py-2 text-[10px] bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 text-white rounded-lg font-bold flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-40 transition-all"
+                        >
+                          <Sparkles className={`w-3.5 h-3.5 ${isMatchingFootage ? "animate-spin" : ""}`} />
+                          {isMatchingFootage ? "Matching..." : "✨ Auto Match"}
+                        </button>
+                        {preMatchFootageOrder && (
+                          <button
+                            onClick={handleUndoMatch}
+                            className="px-3 py-2 text-[10px] bg-[#27272a] hover:bg-[#3f3f46] text-slate-300 rounded-lg font-bold cursor-pointer transition-all border border-[#3f3f46]"
+                          >
+                            ↩ Undo Match
+                          </button>
+                        )}
+                      </div>
+                      {matchExplanation && (
+                        <p className="text-[9px] text-amber-300/80 italic">{matchExplanation}</p>
+                      )}
+                    </div>
+
+                    {/* ── BGM Section ── */}
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-bold text-slate-300">Musik BGM Studio (10 Tracks)</span>
                       <button
@@ -1826,6 +2082,7 @@ export default function CapCutWebStudio() {
                     </div>
                   </div>
                 )}
+
 
                 {/* TAB: EFFECTS & TRANSITIONS */}
                 {activeNavTab === "effects" && (
@@ -2539,6 +2796,43 @@ export default function CapCutWebStudio() {
           </div>
         </div>
       )}
+      {/* AI COPILOT CONFIRMATION MODAL (Fitur 3) */}
+      {copilotConfirm && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[60] flex items-center justify-center p-4">
+          <div className="w-96 p-5 rounded-2xl border border-violet-900/50 bg-[#18181c] space-y-4 shadow-2xl">
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-full bg-violet-600/30 border border-violet-500/40 flex items-center justify-center text-lg">🤖</div>
+              <h3 className="text-xs font-black text-violet-300">Konfirmasi Tindakan AI</h3>
+            </div>
+            <div className="bg-[#09090b] border border-[#27272a] rounded-xl p-3">
+              <p className="text-[11px] text-slate-300 leading-relaxed whitespace-pre-wrap">{copilotConfirm.message}</p>
+            </div>
+            <p className="text-[10px] text-slate-400">Apakah Anda ingin melanjutkan tindakan ini?</p>
+            <div className="flex gap-2">
+              <button
+                onClick={async () => {
+                  const act = copilotConfirm.action;
+                  setCopilotConfirm(null);
+                  const desc = await executeCopilotAction(act);
+                  if (desc) {
+                    setChatMessages(prev => [...prev, { sender: "ai", text: `✅ Tindakan berhasil: ${desc}`, actionApplied: desc }]);
+                  }
+                }}
+                className="flex-1 py-2.5 bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white rounded-xl text-xs font-bold cursor-pointer transition-all"
+              >
+                ✅ Ya, Lanjutkan
+              </button>
+              <button
+                onClick={() => setCopilotConfirm(null)}
+                className="flex-1 py-2.5 bg-[#27272a] hover:bg-[#3f3f46] text-slate-300 rounded-xl text-xs font-bold cursor-pointer transition-all border border-[#3f3f46]"
+              >
+                ✕ Batalkan
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
+
   );
 }

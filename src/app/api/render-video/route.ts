@@ -84,6 +84,7 @@ export async function POST(req: NextRequest) {
     const defaultTrimSec = parseFloat((formData.get("clipDuration") as string) || "3.0");
     const exportPreset = (formData.get("exportPreset") as string) || "720p";
     const aspectRatio = (formData.get("aspectRatio") as string) || "9:16";
+    const targetDuration = parseFloat((formData.get("targetDuration") as string) || "0"); // 0 = no target
 
     let transitionsList: Array<{ type: string; afterClipIndex: number; duration: number }> = [];
     try { transitionsList = JSON.parse((formData.get("transitions") as string) || "[]"); } catch { }
@@ -164,7 +165,28 @@ export async function POST(req: NextRequest) {
       };
     });
 
-    // 5. Auto-generate subtitles from text if none provided
+    // 5. Apply targetDuration: if target is longer than VO, extend clip durations proportionally
+    if (targetDuration > 0 && audioDurationSec > 0) {
+      const totalClipDur = footageItems.reduce((s, f) => s + f.duration, 0);
+      if (targetDuration > audioDurationSec + 0.5) {
+        // Extend main clips (exclude ending cover image) proportionally
+        const extraTime = targetDuration - audioDurationSec;
+        const mainItems = footageItems.filter(f => !/\.png$/i.test(f.url));
+        const mainTotal = mainItems.reduce((s, f) => s + f.duration, 0) || totalClipDur;
+        footageItems.forEach((item, i) => {
+          if (!/\.png$/i.test(item.url)) {
+            const ratio = item.duration / mainTotal;
+            footageItems[i] = { ...item, duration: parseFloat((item.duration + ratio * extraTime).toFixed(2)) };
+          }
+        });
+        console.log(`[render-video] Target duration: ${targetDuration}s, extended clips by ${extraTime.toFixed(1)}s`);
+      } else if (targetDuration < audioDurationSec - 0.5) {
+        // Target is shorter than VO — log warning, frontend should show toast
+        console.warn(`[render-video] targetDuration (${targetDuration}s) < audioDurationSec (${audioDurationSec}s) — ignoring target`);
+      }
+    }
+
+    // 6. Auto-generate subtitles from text if none provided
     if (subtitleChunksList.length === 0 && subtitleText.trim()) {
       const textChunks = splitTextIntoAutoCaptionChunks(subtitleText, 3);
       const voDuration = audioDurationSec > 0 ? audioDurationSec : footageItems.reduce((acc, f) => acc + f.duration, 0);
