@@ -1,16 +1,17 @@
 /**
  * renderQueue.ts — In-process async render job queue (no Redis needed).
  *
- * Jobs are stored in a module-level Map (survives across requests in the same
- * Node.js process). Rendered MP4 files live in `<cwd>/tmp/render-output/`.
- * Auto-cleanup removes files + job entries older than CLEANUP_AFTER_MS.
- *
- * Concurrency = 1: only one Remotion render runs at a time to avoid OOM
- * on a 2-vCPU / limited-RAM VPS.
+ * Architecture:
+ * - Bundle is built ONCE per server process and cached in memory (~20-30s first time).
+ * - Per-job media files are served via a lightweight Node.js HTTP server on a random port.
+ *   This avoids file:// URL restrictions AND doesn't depend on Next.js serving public/.
+ * - Concurrency = 1: only one Remotion render at a time to avoid OOM on 2-vCPU VPS.
  */
 
 import path from "path";
 import { mkdir, rm } from "fs/promises";
+import { createReadStream, statSync } from "fs";
+import http from "http";
 import { renderMedia, selectComposition } from "@remotion/renderer";
 import { bundle } from "@remotion/bundler";
 import { exec } from "child_process";
@@ -19,7 +20,6 @@ import { promisify } from "util";
 const execAsync = promisify(exec);
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-// Rendered output MP4 files go here (separate from per-job temp upload dirs)
 const OUTPUT_DIR = path.join(process.cwd(), "tmp", "render-output");
 const CLEANUP_AFTER_MS = 2 * 60 * 60 * 1000; // 2 hours
 const CLEANUP_INTERVAL_MS = 30 * 60 * 1000;   // check every 30 min
@@ -30,7 +30,7 @@ export type JobStatus = "pending" | "rendering" | "done" | "error";
 export interface JobState {
   jobId: string;
   status: JobStatus;
-  progress: number;       // 0-100
+  progress: number;
   renderedFrames: number;
   totalFrames: number;
   outputPath: string | null;
@@ -63,6 +63,32 @@ const jobQueue: Array<{ jobId: string; data: RenderJobData }> = [];
 let isWorkerRunning = false;
 let cleanupTimerStarted = false;
 
+// ─── Bundle cache ─────────────────────────────────────────────────────────────
+// Built once per server process lifetime. Subsequent renders skip the ~20-30s webpack step.
+let _cachedServeUrl: string | null = null;
+let _bundling: Promise<string> | null = null;
+
+export async function getOrBuildBundle(): Promise<string> {
+  if (_cachedServeUrl) return _cachedServeUrl;
+  if (_bundling) return _bundling;
+
+  _bundling = (async () => {
+    console.log("[renderQueue] Building Remotion bundle (first time, will be cached)...");
+    const entryPoint = path.join(process.cwd(), "src/remotion/index.ts");
+    const serveUrl = await bundle({
+      entryPoint,
+      ignoreRegisterRootWarning: true,
+      // NO publicDir — media files are served per-job via startMediaServer()
+    });
+    _cachedServeUrl = serveUrl;
+    _bundling = null;
+    console.log("[renderQueue] ✓ Bundle cached at:", serveUrl);
+    return serveUrl;
+  })();
+
+  return _bundling;
+}
+
 // ─── ffmpeg helper ─────────────────────────────────────────────────────────────
 const FFMPEG_PATHS = [
   "/opt/homebrew/bin/ffmpeg",
@@ -70,6 +96,8 @@ const FFMPEG_PATHS = [
   "/usr/bin/ffmpeg",
   "ffmpeg",
 ];
+
+let _cachedFfmpegBin: string | null | undefined = undefined;
 
 async function findFfmpeg(): Promise<string | null> {
   for (const bin of FFMPEG_PATHS) {
@@ -164,10 +192,10 @@ async function runWorker() {
   console.log("[renderQueue] Worker idle (queue empty).");
 }
 
-// ─── Per-job media file server ────────────────────────────────────────────────
-// Remotion's internal proxy only supports http:// and https://.
-// We spin up a lightweight HTTP server per render job to serve media files
-// from tempDir on a random free port. Server is closed after render completes.
+// ─── Per-job media file HTTP server ────────────────────────────────────────────
+// Remotion's internal proxy only supports http:// and https:// — not file://.
+// We spin up a tiny Node.js HTTP server per job on a random free port (port 0).
+// This is completely independent of Next.js and works in both dev and production.
 async function startMediaServer(dir: string): Promise<{ baseUrl: string; close: () => void }> {
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
@@ -188,117 +216,25 @@ async function startMediaServer(dir: string): Promise<{ baseUrl: string; close: 
     });
     server.listen(0, "127.0.0.1", () => {
       const port = (server.address() as { port: number }).port;
-      console.log(`[renderQueue] Media server started on port ${port} for dir: ${path.basename(dir)}`);
-      resolve({
-        baseUrl: `http://127.0.0.1:${port}`,
-        close: () => server.close(),
-      });
+      console.log(`[renderQueue] Media server on port ${port} for: ${path.basename(dir)}`);
+      resolve({ baseUrl: `http://127.0.0.1:${port}`, close: () => server.close() });
     });
     server.on("error", reject);
   });
 }
 
 // ─── Core render logic ─────────────────────────────────────────────────────────
-// Build a fresh Remotion bundle per job with publicDir pointing to tempDir.
-// This is the original proven approach — Remotion serves media via its own
-// HTTP server, so filenames like "footage_0.MOV" resolve correctly via staticFile().
 async function processRender(job: JobState, data: RenderJobData, outputPath: string) {
-  const entryPoint = path.join(process.cwd(), "src/remotion/index.ts");
+  // Use cached bundle (built once, no per-job webpack cost)
+  const serveUrl = await getOrBuildBundle();
 
-  console.log(`[renderQueue] Building Remotion bundle for job ${job.jobId}...`);
-  const serveUrl = await bundle({
-    entryPoint,
-    ignoreRegisterRootWarning: true,
-    publicDir: data.tempDir, // ← media files served by Remotion's own HTTP server
-  });
-  console.log(`[renderQueue] ✓ Bundle ready`);
-
-  try {
-    const {
-      footageItems, transitionsList, subtitleChunksList,
-      voiceOverUrl, bgmUrl, bgmVolume,
-      subtitleStyle, subtitleFontSize, subtitleBottomPos,
-      defaultTrimSec, exportPreset, aspectRatio,
-    } = data;
-
-    const inputProps = {
-      footages: footageItems,       // urls are plain filenames, staticFile() resolves them
-      transitions: transitionsList,
-      subtitles: subtitleChunksList,
-      voiceOverUrl,
-      bgmUrl,
-      bgmVolume,
-      subtitleStyle,
-      subtitleFontSize,
-      subtitleBottomPos,
-      clipDuration: defaultTrimSec,
-    };
-
-    const composition = await selectComposition({ serveUrl, id: "MainComposition", inputProps });
-
-    let targetWidth = 720, targetHeight = 1280, targetFps = 30;
-    if (exportPreset === "1080p") {
-      targetFps = 60;
-      if (aspectRatio === "9:16") { targetWidth = 1080; targetHeight = 1920; }
-      else if (aspectRatio === "16:9") { targetWidth = 1920; targetHeight = 1080; }
-      else { targetWidth = 1080; targetHeight = 1080; }
-    } else if (exportPreset === "480p") {
-      targetFps = 30;
-      if (aspectRatio === "9:16") { targetWidth = 480; targetHeight = 854; }
-      else if (aspectRatio === "16:9") { targetWidth = 854; targetHeight = 480; }
-      else { targetWidth = 480; targetHeight = 480; }
-    } else {
-      if (aspectRatio === "9:16") { targetWidth = 720; targetHeight = 1280; }
-      else if (aspectRatio === "16:9") { targetWidth = 1280; targetHeight = 720; }
-      else { targetWidth = 720; targetHeight = 720; }
-    }
-
-    composition.width = targetWidth;
-    composition.height = targetHeight;
-    composition.fps = targetFps;
-
-    let totalFrames = 0;
-    for (const f of footageItems) {
-      totalFrames += Math.max(1, Math.round((f.duration || defaultTrimSec || 3) * targetFps));
-    }
-    composition.durationInFrames = Math.max(targetFps, totalFrames);
-    job.totalFrames = composition.durationInFrames;
-
-    console.log(`[renderQueue] Rendering: ${composition.durationInFrames} frames @ ${targetWidth}x${targetHeight} ${targetFps}fps`);
-
-    await renderMedia({
-      composition,
-      serveUrl,
-      codec: "h264",
-      outputLocation: outputPath,
-      inputProps,
-      concurrency: 1,
-      chromiumOptions: { enableMultiProcessOnLinux: true },
-      onProgress: ({ renderedFrames }) => {
-        job.renderedFrames = renderedFrames;
-        job.progress = Math.round((renderedFrames / composition.durationInFrames) * 100);
-        if (renderedFrames % 30 === 0 || renderedFrames === composition.durationInFrames) {
-          console.log(`[renderQueue] 🎬 ${job.jobId}: ${job.progress}% (${renderedFrames}/${composition.durationInFrames})`);
-        }
-      },
-    });
-  } finally {
-    // Always cleanup temp dir (media files) after render completes or fails
-    rm(data.tempDir, { recursive: true, force: true }).catch(() => {});
-    // Also cleanup the webpack bundle dir created by bundle()
-    rm(serveUrl, { recursive: true, force: true }).catch(() => {});
-  }
-}
-
-
-  // Start per-job HTTP media server so Remotion's proxy can access files
+  // Start a per-job HTTP server to serve media files from tempDir
   const { baseUrl, close: closeMediaServer } = await startMediaServer(data.tempDir);
 
-  // Remap any URL format to http://127.0.0.1:<port>/<filename>
+  // Map filename → http://127.0.0.1:<port>/<filename>
   const toMediaUrl = (url: string | undefined): string | undefined => {
     if (!url) return undefined;
-    const filename = url.split("/").pop()!;
-    return `${baseUrl}/${filename}`;
+    return `${baseUrl}/${url.split("/").pop()!}`;
   };
 
   try {
@@ -309,10 +245,8 @@ async function processRender(job: JobState, data: RenderJobData, outputPath: str
       defaultTrimSec, exportPreset, aspectRatio,
     } = data;
 
-    const remappedFootages = footageItems.map(f => ({ ...f, url: toMediaUrl(f.url)! }));
-
     const inputProps = {
-      footages: remappedFootages,
+      footages: footageItems.map(f => ({ ...f, url: toMediaUrl(f.url)! })),
       transitions: transitionsList,
       subtitles: subtitleChunksList,
       voiceOverUrl: toMediaUrl(voiceOverUrl),
@@ -337,7 +271,7 @@ async function processRender(job: JobState, data: RenderJobData, outputPath: str
       if (aspectRatio === "9:16") { targetWidth = 480; targetHeight = 854; }
       else if (aspectRatio === "16:9") { targetWidth = 854; targetHeight = 480; }
       else { targetWidth = 480; targetHeight = 480; }
-    } else {
+    } else { // 720p default
       if (aspectRatio === "9:16") { targetWidth = 720; targetHeight = 1280; }
       else if (aspectRatio === "16:9") { targetWidth = 1280; targetHeight = 720; }
       else { targetWidth = 720; targetHeight = 720; }
@@ -373,12 +307,11 @@ async function processRender(job: JobState, data: RenderJobData, outputPath: str
       },
     });
   } finally {
-    // Always close media server & cleanup temp dir, even if render failed
     closeMediaServer();
+    // Delete temp upload files only — serveUrl is the cached bundle, do NOT delete it
     rm(data.tempDir, { recursive: true, force: true }).catch(() => {});
   }
 }
-
 
 // ─── Cleanup old jobs ──────────────────────────────────────────────────────────
 async function cleanupOldJobs() {
