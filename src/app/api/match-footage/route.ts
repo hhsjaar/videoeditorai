@@ -6,28 +6,22 @@ const genai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 /**
  * POST /api/match-footage
  *
- * Uses Gemini to semantically match voiceover words/segments to the best footage clip.
- * Returns an optimal ordering of footage clips and suggested segment timings.
+ * Uses Gemini Vision to analyze footage thumbnails and match them to voiceover content.
+ * Falls back to filename analysis if no thumbnails are provided.
  *
  * Request body:
  *   {
- *     script: string,          // Full voiceover text
- *     wordTimings: { word, start, end }[],  // Word-level timestamps from TTS
- *     footageNames: string[],   // Filenames of uploaded footage clips
- *     audioDurationSec: number  // Total VO duration
- *   }
- *
- * Response:
- *   {
- *     orderedIndices: number[],  // Optimal ordering (indices into footageNames)
- *     clipTimings: { index: number, startSec: number, endSec: number }[],
- *     explanation: string
+ *     script: string,
+ *     wordTimings: { word, start, end }[],
+ *     footageNames: string[],
+ *     audioDurationSec: number,
+ *     thumbnails?: string[]  // base64 JPEG/PNG thumbnails per clip (optional)
  *   }
  */
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { script, wordTimings, footageNames, audioDurationSec } = body;
+    const { script, wordTimings, footageNames, audioDurationSec, thumbnails } = body;
 
     if (!footageNames || !Array.isArray(footageNames) || footageNames.length === 0) {
       return NextResponse.json({ error: "footageNames required" }, { status: 400 });
@@ -37,10 +31,63 @@ export async function POST(req: NextRequest) {
     const voText = script || "";
     const voDur = parseFloat(audioDurationSec) || 10;
 
-    // Build a word timing summary for Gemini
+    // Step 1: Describe each clip's visual content using Gemini Vision (if thumbnails provided)
+    const clipDescriptions: string[] = [];
+    const hasThumbnails = thumbnails && Array.isArray(thumbnails) && thumbnails.length === n;
+
+    if (hasThumbnails) {
+      console.log(`[match-footage] Analyzing ${n} thumbnails with Gemini Vision...`);
+      for (let i = 0; i < n; i++) {
+        const thumb = thumbnails[i];
+        if (!thumb) {
+          clipDescriptions.push(`Klip ${i + 1}: "${footageNames[i]}" (tidak ada thumbnail)`);
+          continue;
+        }
+        try {
+          // Strip data URL prefix if present
+          const base64Data = thumb.includes(",") ? thumb.split(",")[1] : thumb;
+          const mimeMatch = thumb.match(/data:([^;]+);base64/);
+          const mimeType = mimeMatch ? mimeMatch[1] : "image/jpeg";
+
+          const visionResult = await genai.models.generateContent({
+            model: "gemini-2.0-flash",
+            contents: [
+              {
+                role: "user",
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType,
+                      data: base64Data,
+                    },
+                  },
+                  {
+                    text: `Deskripsikan secara singkat (1-2 kalimat) konten visual dari gambar/frame video ini. Fokus pada: subjek utama, latar, suasana, dan kata kunci yang relevan untuk video promosi. Jawab dalam Bahasa Indonesia.`,
+                  },
+                ],
+              },
+            ],
+            config: { temperature: 0.1 },
+          });
+
+          const desc = visionResult?.text?.trim() || `Klip ${i + 1}`;
+          clipDescriptions.push(`Klip ${i + 1} (${footageNames[i]}): ${desc}`);
+          console.log(`[match-footage] Clip ${i + 1} vision: ${desc.substring(0, 80)}`);
+        } catch (vErr: any) {
+          console.warn(`[match-footage] Vision failed for clip ${i}:`, vErr.message);
+          clipDescriptions.push(`Klip ${i + 1}: "${footageNames[i]}" (gagal analisis visual)`);
+        }
+      }
+    } else {
+      // Fallback: use filenames only
+      footageNames.forEach((name: string, i: number) => {
+        clipDescriptions.push(`Klip ${i + 1}: "${name}"`);
+      });
+    }
+
+    // Step 2: Build word timing summary
     let timingSummary = "";
     if (wordTimings && Array.isArray(wordTimings) && wordTimings.length > 0) {
-      // Group words into 5-word chunks for readability
       const chunks: string[] = [];
       for (let i = 0; i < wordTimings.length; i += 5) {
         const slice = wordTimings.slice(i, i + 5);
@@ -51,37 +98,34 @@ export async function POST(req: NextRequest) {
       timingSummary = chunks.join("\n");
     }
 
-    const prompt = `You are a professional video editor's AI assistant. Your job is to intelligently match footage clips to voiceover content.
+    // Step 3: Semantic matching with Gemini
+    const prompt = `Kamu adalah editor video profesional. Tugasmu: mengurutkan klip footage agar paling relevan dengan narasi voiceover.
 
-Voiceover Script:
+Narasi Voiceover:
 "${voText}"
 
-Total VO Duration: ${voDur.toFixed(1)} seconds
+Total Durasi VO: ${voDur.toFixed(1)} detik
 
-Word Timing Segments:
-${timingSummary || "(no word timings available)"}
+Segmen Waktu Narasi:
+${timingSummary || "(tidak ada word timing)"}
 
-Available Footage Clips (index: filename):
-${footageNames.map((name: string, i: number) => `${i}: "${name}"`).join("\n")}
+Deskripsi Visual Setiap Klip:
+${clipDescriptions.join("\n")}
 
-Task: Analyze the voiceover content and the footage filenames. Based on semantic relevance (what the words/sentences describe vs what the footage likely shows), create the optimal clip order and timing.
+Aturan:
+1. Setiap klip harus muncul tepat 1 kali
+2. Durasi setiap segmen harus positif, minimum 1.0 detik
+3. Total durasi harus persis ${voDur.toFixed(1)} detik
+4. Urutan harus logis secara naratif (konten klip sesuai dengan kata-kata narasi yang sedang diucapkan)
+5. Klip yang memuat "Cover Akhiran" atau "ending" harus tetap di urutan TERAKHIR
 
-Rules:
-1. Every clip must appear at least once
-2. Clip timings must be sequential with no gaps and no overlaps
-3. Total duration must equal exactly ${voDur.toFixed(1)} seconds
-4. Each clip should be at minimum 1.0 second
-5. If a filename suggests a specific scene (e.g. "gunung.mp4" → mountain), align it with the moment the voiceover mentions that scene
-6. If filenames are generic (e.g. "VID001.mp4"), distribute clips evenly
-
-Respond ONLY with a JSON object, no other text:
+Respons HANYA JSON (tanpa teks lain):
 {
-  "orderedIndices": [array of clip indices in display order, e.g. [2, 0, 1, 3]],
+  "orderedIndices": [<array indeks 0-based, contoh: [2, 0, 1]>],
   "clipTimings": [
-    { "index": <clip index>, "startSec": <float>, "endSec": <float> },
-    ...
+    { "index": <indeks klip>, "startSec": <float>, "endSec": <float> }
   ],
-  "explanation": "Brief explanation of matching logic in Bahasa Indonesia"
+  "explanation": "Penjelasan singkat alasan pengurutannya dalam Bahasa Indonesia"
 }`;
 
     let result: any = null;
@@ -90,7 +134,7 @@ Respond ONLY with a JSON object, no other text:
         result = await genai.models.generateContent({
           model: modelName,
           contents: [{ role: "user", parts: [{ text: prompt }] }],
-          config: { temperature: 0.2 },
+          config: { temperature: 0.1 },
         });
         if (result?.text) break;
       } catch (e) {
@@ -99,7 +143,6 @@ Respond ONLY with a JSON object, no other text:
     }
 
     if (!result?.text) {
-      // Fallback: equal distribution
       return NextResponse.json(generateEqualDistribution(n, voDur));
     }
 
@@ -116,7 +159,7 @@ Respond ONLY with a JSON object, no other text:
       return NextResponse.json(generateEqualDistribution(n, voDur));
     }
 
-    // Validate and sanitize
+    // Validate ordered indices
     const orderedIndices: number[] = Array.isArray(parsed.orderedIndices)
       ? parsed.orderedIndices.filter((i: any) => typeof i === "number" && i >= 0 && i < n)
       : [];
@@ -137,7 +180,6 @@ Respond ONLY with a JSON object, no other text:
         )
       : [];
 
-    // If timings are invalid or incomplete, regenerate them from orderedIndices
     const finalTimings =
       clipTimings.length === orderedIndices.length
         ? clipTimings
@@ -146,7 +188,8 @@ Respond ONLY with a JSON object, no other text:
     return NextResponse.json({
       orderedIndices,
       clipTimings: finalTimings,
-      explanation: parsed.explanation || "Klip disusun berdasarkan analisis semantik voiceover.",
+      explanation: parsed.explanation || "Klip disusun berdasarkan analisis visual dan narasi.",
+      usedVision: hasThumbnails,
     });
   } catch (err: any) {
     console.error("[match-footage] Error:", err);
@@ -162,12 +205,12 @@ function generateEqualDistribution(n: number, totalDur: number) {
     startSec: parseFloat((i * perClip).toFixed(2)),
     endSec: parseFloat(Math.min(totalDur, (i + 1) * perClip).toFixed(2)),
   }));
-  // Fix last clip to exactly totalDur
   if (timings.length > 0) timings[timings.length - 1].endSec = totalDur;
   return {
     orderedIndices: indices,
     clipTimings: timings,
-    explanation: "Klip dibagi rata karena tidak dapat mendeteksi konteks semantik dari nama file.",
+    explanation: "Klip dibagi rata karena tidak ada thumbnail untuk analisis visual.",
+    usedVision: false,
   };
 }
 

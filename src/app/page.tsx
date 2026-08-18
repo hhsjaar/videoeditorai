@@ -212,6 +212,53 @@ export default function CapCutWebStudio() {
     scrollToBottomChat();
   }, [chatMessages, isChatSending]);
 
+  // ─── Capture thumbnail dari footage (canvas) ─────────────────────────────────
+  const captureFootageThumbnail = (footage: UploadedFootage): Promise<string | null> => {
+    return new Promise((resolve) => {
+      const isImage = /\.(png|jpe?g|webp|gif|bmp|heic|heif)$/i.test(footage.name) ||
+        footage.previewUrl.startsWith("blob:") && footage.file.type.startsWith("image/");
+
+      const canvas = document.createElement("canvas");
+      canvas.width = 320;
+      canvas.height = 180;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) { resolve(null); return; }
+
+      const toBase64 = () => {
+        try { return canvas.toDataURL("image/jpeg", 0.7); } catch { return null; }
+      };
+
+      if (isImage || footage.file.type.startsWith("image/")) {
+        const img = new Image();
+        img.crossOrigin = "anonymous";
+        img.onload = () => {
+          ctx.drawImage(img, 0, 0, 320, 180);
+          resolve(toBase64());
+        };
+        img.onerror = () => resolve(null);
+        img.src = footage.previewUrl;
+      } else {
+        // video — seek to 1s then capture frame
+        const vid = document.createElement("video");
+        vid.crossOrigin = "anonymous";
+        vid.muted = true;
+        vid.preload = "metadata";
+        vid.src = footage.previewUrl;
+        const timeout = setTimeout(() => { vid.src = ""; resolve(null); }, 5000);
+        vid.onloadedmetadata = () => {
+          vid.currentTime = Math.min(1.0, (vid.duration || 0) * 0.25);
+        };
+        vid.onseeked = () => {
+          clearTimeout(timeout);
+          ctx.drawImage(vid, 0, 0, 320, 180);
+          vid.src = "";
+          resolve(toBase64());
+        };
+        vid.onerror = () => { clearTimeout(timeout); resolve(null); };
+      }
+    });
+  };
+
   // ─── Footage Semantic Matching (Fitur 4) ────────────────────────────────────
   const handleAutoMatchFootage = async () => {
     if (!audioUrl || footages.length < 2) {
@@ -222,15 +269,23 @@ export default function CapCutWebStudio() {
     try {
       const script = polishedScript || rawScript;
       const footageNames = footages.map(f => f.name);
+
+      // Capture thumbnails for Gemini Vision analysis
+      setChatMessages(prev => [...prev, { sender: "ai", text: "🔍 Menganalisis konten visual setiap klip dengan Gemini Vision..." }]);
+      const thumbnails: (string | null)[] = await Promise.all(
+        footages.map(f => captureFootageThumbnail(f))
+      );
+      const validThumbnails = thumbnails.every(t => t !== null) ? thumbnails as string[] : undefined;
+
       const res = await fetch("/api/match-footage", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ script, wordTimings, footageNames, audioDurationSec }),
+        body: JSON.stringify({ script, wordTimings, footageNames, audioDurationSec, thumbnails: validThumbnails }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
 
-      const { orderedIndices, clipTimings, explanation } = data;
+      const { orderedIndices, clipTimings, explanation, usedVision } = data;
 
       // Save current order for undo
       setPreMatchFootageOrder([...footages]);
@@ -249,10 +304,13 @@ export default function CapCutWebStudio() {
       });
       setCustomClipDurations(newDurMap);
 
-      setChatMessages(prev => [...prev, {
-        sender: "ai",
-        text: `✨ Auto-Match selesai! ${explanation}\n\nKlip sudah disusun ulang sesuai narasi. Gunakan tombol "Undo Match" jika ingin balik ke urutan semula.`,
-      }]);
+      setChatMessages(prev => {
+        const filtered = prev.filter(m => !m.text.includes("Menganalisis konten visual"));
+        return [...filtered, {
+          sender: "ai",
+          text: `✨ Auto-Match selesai${usedVision ? " (Gemini Vision 🔍)" : ""}!\n\n${explanation}\n\nKlip sudah disusun ulang sesuai narasi. Gunakan tombol "↩ Undo Match" jika ingin balik ke urutan semula.`,
+        }];
+      });
     } catch (e: any) {
       alert(e.message || "Gagal melakukan auto-match footage.");
     } finally {
@@ -299,8 +357,40 @@ export default function CapCutWebStudio() {
       setCustomClipDurations(prev => ({ ...prev, [idx]: act.payload.duration }));
       desc = `Durasi klip ${idx + 1} diubah ke ${act.payload.duration}s`;
     } else if (act.type === "set_target_duration") {
-      setTargetDuration(act.payload.seconds);
-      desc = `Target durasi video diset ke ${act.payload.seconds}s`;
+      const targetSec: number = act.payload.seconds;
+      setTargetDuration(targetSec);
+      // Immediately redistribute durations across footage clips (EXCLUDE Cover Akhiran)
+      if (footages.length > 0 && targetSec > 0) {
+        const newDurMap = { ...customClipDurations };
+        // Identify Cover Akhiran index
+        const endingIdx = footages.findIndex(f =>
+          f.name.includes("Cover Akhiran") || f.name.includes("ending") || f.name.includes("Akhiran")
+        );
+        const endingDur = endingIdx !== -1 ? (customClipDurations[endingIdx] || 3.0) : 0;
+        // Available time for main clips
+        const mainTargetDur = Math.max(1, targetSec - endingDur);
+        const mainCount = footages.filter((_, i) => i !== endingIdx).length;
+        if (mainCount > 0) {
+          // Distribute evenly among main clips (proportional to current duration)
+          const mainTotal = footages.reduce((s, _, i) =>
+            i !== endingIdx ? s + (customClipDurations[i] || clipDuration) : s, 0) || mainCount * clipDuration;
+          let accumulated = 0;
+          const mainIndices = footages.map((_, i) => i).filter(i => i !== endingIdx);
+          mainIndices.forEach((idx, pos) => {
+            const weight = (customClipDurations[idx] || clipDuration) / mainTotal;
+            if (pos === mainIndices.length - 1) {
+              newDurMap[idx] = parseFloat(Math.max(1, mainTargetDur - accumulated).toFixed(2));
+            } else {
+              const dur = parseFloat(Math.max(1, weight * mainTargetDur).toFixed(2));
+              newDurMap[idx] = dur;
+              accumulated += dur;
+            }
+          });
+          setCustomClipDurations(newDurMap);
+        }
+      }
+      desc = `Durasi video diubah ke ${targetSec}s — klip diperpanjang rata`;
+
     } else if (act.type === "change_aspect_ratio") {
       setAspectRatio(act.payload.ratio);
       desc = `Rasio aspek diubah ke ${act.payload.ratio}`;
@@ -846,8 +936,28 @@ export default function CapCutWebStudio() {
         await handleGenerateAudio();
       }
 
+      // If user set target duration, use that as the clip sync target (main clips only)
+      const effectiveDur = targetDuration > 0 ? targetDuration : (audioUrl && audioDurationSec > 0 ? audioDurationSec : 15.0);
       const targetVoDur = (audioUrl && audioDurationSec > 0) ? audioDurationSec : 15.0;
+
       const syncedDurMap = syncClipDurationsWithVO(footages, targetVoDur);
+
+      // If targetDuration > VO, extend main clips proportionally
+      if (targetDuration > 0 && targetDuration > targetVoDur + 0.5) {
+        const extraTime = targetDuration - targetVoDur;
+        const endingIdx = footages.findIndex(f => f.name.includes("Cover Akhiran") || f.name.includes("Akhiran"));
+        const mainIndices = footages.map((_, i) => i).filter(i => i !== endingIdx);
+        const mainTotal = mainIndices.reduce((s, i) => s + (syncedDurMap[i] || clipDuration), 0) || 1;
+        mainIndices.forEach((i, pos) => {
+          const ratio = (syncedDurMap[i] || clipDuration) / mainTotal;
+          if (pos === mainIndices.length - 1) {
+            syncedDurMap[i] = parseFloat(Math.max(1, (targetDuration - targetVoDur) - mainIndices.slice(0, -1).reduce((s, j) => s + (syncedDurMap[j] || 0) - (syncedDurMap[j] || 0) + ratio * extraTime, 0)).toFixed(2));
+          } else {
+            syncedDurMap[i] = parseFloat(Math.max(1, (syncedDurMap[i] || clipDuration) + ratio * extraTime).toFixed(2));
+          }
+        });
+      }
+
       setCustomClipDurations(syncedDurMap);
 
       if (includeEndingCover) {
@@ -872,6 +982,12 @@ export default function CapCutWebStudio() {
           if (hasEnding) return prev;
           const updated = [...prev, endingFootage];
           const updatedDurMap = syncClipDurationsWithVO(updated, targetVoDur);
+          // Preserve target duration extension for main clips
+          Object.keys(syncedDurMap).forEach(k => {
+            const ki = parseInt(k);
+            if (ki < updated.length - 1) updatedDurMap[ki] = syncedDurMap[ki];
+          });
+          updatedDurMap[updated.length - 1] = 3.0; // Ending always 3s
           setCustomClipDurations(updatedDurMap);
 
           setTransitionsMap((tPrev) => ({
@@ -886,12 +1002,19 @@ export default function CapCutWebStudio() {
       setAutoCaptionGenerated(true);
       await new Promise((resolve) => setTimeout(resolve, 800));
       setViewMode("studio");
+
+      // Process additional instructions via AI Copilot AFTER entering studio
+      if (additionalInstructions.trim()) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        await handleSendChatMessage(`[Instruksi otomatis dari wizard] ${additionalInstructions}`);
+      }
     } catch (err: any) {
       alert(err.message || "Gagal memproses video konsep.");
     } finally {
       setIsGeneratingConcept(false);
     }
   };
+
   const applyTransitionToPlayhead = (transitionId: string) => {
     if (footages.length <= 1) return alert("Upload minimal 2 klip video untuk memasang transisi!");
 

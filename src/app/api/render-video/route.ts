@@ -165,26 +165,38 @@ export async function POST(req: NextRequest) {
       };
     });
 
-    // 5. Apply targetDuration: if target is longer than VO, extend clip durations proportionally
+    // 5. Apply targetDuration: extend main clips only (never touch Cover Akhiran)
     if (targetDuration > 0 && audioDurationSec > 0) {
-      const totalClipDur = footageItems.reduce((s, f) => s + f.duration, 0);
       if (targetDuration > audioDurationSec + 0.5) {
-        // Extend main clips (exclude ending cover image) proportionally
         const extraTime = targetDuration - audioDurationSec;
-        const mainItems = footageItems.filter(f => !/\.png$/i.test(f.url));
-        const mainTotal = mainItems.reduce((s, f) => s + f.duration, 0) || totalClipDur;
-        footageItems.forEach((item, i) => {
-          if (!/\.png$/i.test(item.url)) {
-            const ratio = item.duration / mainTotal;
-            footageItems[i] = { ...item, duration: parseFloat((item.duration + ratio * extraTime).toFixed(2)) };
-          }
-        });
-        console.log(`[render-video] Target duration: ${targetDuration}s, extended clips by ${extraTime.toFixed(1)}s`);
+
+        // Identify main clips (exclude ending cover: .png files with "akhiran/ending" OR generic ending cover)
+        const isEndingCover = (item: typeof footageItems[0], filename: string) =>
+          /\.(png|jpe?g|webp)$/i.test(item.url) &&
+          /akhiran|ending|cover/i.test(filename);
+
+        const mainIndices = footageItems.map((item, i) => {
+          const fname = savedFootageFilenames[i] || item.url;
+          return isEndingCover(item, fname) ? -1 : i;
+        }).filter(i => i !== -1);
+
+        const mainTotal = mainIndices.reduce((s, i) => s + footageItems[i].duration, 0);
+
+        if (mainTotal > 0 && mainIndices.length > 0) {
+          mainIndices.forEach(i => {
+            const ratio = footageItems[i].duration / mainTotal;
+            footageItems[i] = {
+              ...footageItems[i],
+              duration: parseFloat((footageItems[i].duration + ratio * extraTime).toFixed(2)),
+            };
+          });
+          console.log(`[render-video] Target: ${targetDuration}s, extended ${mainIndices.length} main clips by ${extraTime.toFixed(1)}s total`);
+        }
       } else if (targetDuration < audioDurationSec - 0.5) {
-        // Target is shorter than VO — log warning, frontend should show toast
-        console.warn(`[render-video] targetDuration (${targetDuration}s) < audioDurationSec (${audioDurationSec}s) — ignoring target`);
+        console.warn(`[render-video] targetDuration (${targetDuration}s) < VO (${audioDurationSec}s) — ignored`);
       }
     }
+
 
     // 6. Auto-generate subtitles from text if none provided
     if (subtitleChunksList.length === 0 && subtitleText.trim()) {
