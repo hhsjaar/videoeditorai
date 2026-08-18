@@ -8,6 +8,37 @@ import { renderMedia, selectComposition } from "@remotion/renderer";
 
 const execAsync = promisify(exec);
 
+// ============================================================
+// MODULE-LEVEL CACHE: bundle & ffmpeg path are computed once
+// per server process lifetime, not per request.
+// This saves ~10-30s and significant RAM on every render call.
+// ============================================================
+let _cachedServeUrl: string | null = null;
+let _bundling: Promise<string> | null = null;
+let _cachedFfmpegBin: string | null | undefined = undefined; // undefined = not yet detected
+
+async function getOrBuildBundle(): Promise<string> {
+  if (_cachedServeUrl) return _cachedServeUrl;
+  if (_bundling) return _bundling; // deduplicate concurrent requests
+
+  _bundling = (async () => {
+    console.log("[render-video] Building Remotion bundle (first time, will be cached)...");
+    const entryPoint = path.join(process.cwd(), "src/remotion/index.ts");
+    const serveUrl = await bundle({
+      entryPoint,
+      ignoreRegisterRootWarning: true,
+      // NOTE: publicDir is NOT set here — files are served from tempDir per-request
+      // via Remotion's staticFile() mechanism using serveUrl override in selectComposition.
+    });
+    _cachedServeUrl = serveUrl;
+    _bundling = null;
+    console.log("[render-video] ✓ Bundle cached at:", serveUrl);
+    return serveUrl;
+  })();
+
+  return _bundling;
+}
+
 const FFMPEG_PATHS = [
   "/opt/homebrew/bin/ffmpeg",  // macOS Apple Silicon (Homebrew)
   "/usr/local/bin/ffmpeg",    // macOS Intel (Homebrew) / Linux
@@ -29,9 +60,6 @@ async function findFfmpeg(): Promise<string | null> {
 // Pre-trim a video clip to exact duration using ffmpeg.
 // This is MORE RELIABLE than relying on Remotion's OffthreadVideo seek,
 // especially for long iPhone .MOV / HEVC files.
-// Pre-trim a video clip to exact duration using ffmpeg.
-// Uses ultrafast libx264 re-encoding to guarantee 100% frame-accurate cut,
-// consistent keyframes, and zero StreamRead/Pipe EOF errors in Remotion renderer.
 async function preTrimWithFfmpeg(
   ffmpegBin: string,
   inputPath: string,
@@ -42,18 +70,19 @@ async function preTrimWithFfmpeg(
   const ssArg = startFromSec > 0.01 ? `-ss ${startFromSec.toFixed(3)}` : "";
   const tArg = `-t ${durationSec.toFixed(3)}`;
 
-  // Re-encode with ultrafast libx264 (takes < 0.4s per clip, 100% frame-accurate)
+  // Try stream-copy first (fast, no re-encode)
   try {
-    const cmd = `"${ffmpegBin}" -y ${ssArg} -i "${inputPath}" ${tArg} -c:v libx264 -preset ultrafast -crf 20 -pix_fmt yuv420p -c:a aac -ar 44100 -movflags +faststart -avoid_negative_ts make_zero "${outputPath}"`;
-    console.log(`[render-video] ffmpeg trim cmd: ${cmd}`);
-    await execAsync(cmd, { timeout: 60000 });
+    const cmd = `"${ffmpegBin}" -y ${ssArg} -i "${inputPath}" ${tArg} -c copy -avoid_negative_ts make_zero "${outputPath}"`;
+    console.log(`[render-video] ffmpeg cmd: ${cmd}`);
+    const { stdout, stderr } = await execAsync(cmd, { timeout: 60000 });
     return true;
-  } catch (err: any) {
-    console.warn(`[render-video] Ultrafast re-encode failed, trying stream copy fallback:`, err?.message?.slice(0, 200));
+  } catch (err1: any) {
+    console.warn(`[render-video] stream-copy failed, trying re-encode:`, err1?.message?.slice(0, 200));
+    // Fallback: re-encode (handles HEVC / VFR / non-keyframe issues)
     try {
       await execAsync(
-        `"${ffmpegBin}" -y ${ssArg} -i "${inputPath}" ${tArg} -c copy -avoid_negative_ts make_zero "${outputPath}"`,
-        { timeout: 60000 }
+        `"${ffmpegBin}" -y ${ssArg} -i "${inputPath}" ${tArg} -c:v libx264 -preset ultrafast -crf 23 -c:a aac -ar 44100 "${outputPath}"`,
+        { timeout: 120000 }
       );
       return true;
     } catch (err2: any) {
@@ -101,19 +130,19 @@ export async function POST(req: NextRequest) {
     let transitionsList: Array<{ type: string; afterClipIndex: number; duration: number }> = [];
     try {
       transitionsList = JSON.parse(transitionsJson);
-    } catch {}
+    } catch { }
 
     const clipDurationsJson = (formData.get("clipDurations") as string) || "[]";
     let clipDurationsList: number[] = [];
     try {
       clipDurationsList = JSON.parse(clipDurationsJson);
-    } catch {}
+    } catch { }
 
     const startFromSecJson = (formData.get("startFromSecList") as string) || "[]";
     let startFromSecList: number[] = [];
     try {
       startFromSecList = JSON.parse(startFromSecJson);
-    } catch {}
+    } catch { }
 
     if (footageFiles.length === 0) {
       return NextResponse.json({ error: "Minimal upload 1 klip video." }, { status: 400 });
@@ -173,13 +202,13 @@ export async function POST(req: NextRequest) {
     let subtitleChunksList: Array<{ text: string; start: number; end: number }> = [];
     try {
       subtitleChunksList = JSON.parse(subtitlesJson);
-    } catch {}
+    } catch { }
 
     const footagesMetaJson = (formData.get("footagesMetaJson") as string) || "[]";
     let footagesMetaList: Array<{ duration: number; startFromSec: number; colorGrade: string }> = [];
     try {
       footagesMetaList = JSON.parse(footagesMetaJson);
-    } catch {}
+    } catch { }
 
     // DEBUG: Log all received data to diagnose preview vs export mismatch
     console.log("[render-video] footageFiles received:", footageFiles.length, footageFiles.map(f => ({ name: f.name, size: f.size })));
@@ -193,9 +222,12 @@ export async function POST(req: NextRequest) {
       const meta = footagesMetaList[i] || {};
       const dur = meta.duration || (clipDurationsList[i] && clipDurationsList[i] > 0 ? clipDurationsList[i] : defaultTrimSec);
       const startSec = meta.startFromSec !== undefined ? meta.startFromSec : (startFromSecList[i] || 0);
+      // Use absolute file:// URL so Remotion Chromium can read the file directly
+      // (required because bundle is cached without publicDir pointing to tempDir)
+      const absoluteUrl = `file://${path.join(tempDir, fn)}`;
       console.log(`[render-video] clip[${i}]: file=${fn}, dur=${dur}s, startFromSec=${startSec}`);
       return {
-        url: fn,
+        url: absoluteUrl,
         duration: dur,
         startFromSec: startSec,
         colorGrade: meta.colorGrade || editingStyle,
@@ -220,7 +252,8 @@ export async function POST(req: NextRequest) {
     // Cut each video clip to exact timeline duration BEFORE Remotion renders.
     // Uses explicit path detection to bypass Node.js PATH env var differences.
     // ====================================================================
-    const ffmpegBin = await findFfmpeg();
+    const ffmpegBin = _cachedFfmpegBin !== undefined ? _cachedFfmpegBin : await findFfmpeg();
+    if (_cachedFfmpegBin === undefined) _cachedFfmpegBin = ffmpegBin; // cache it
 
     if (ffmpegBin) {
       console.log(`[render-video] Pre-trimming ${footageItems.length} clips with ffmpeg (sequential to avoid I/O races)...`);
@@ -239,7 +272,7 @@ export async function POST(req: NextRequest) {
         const trimmedFn = `clip_${i}_trimmed.mp4`;
         const outputPath = path.join(tempDir, trimmedFn);
 
-        console.log(`[render-video] Trimming clip[${i}]: ${fn} → ${trimmedFn} (dur=${item.duration.toFixed(3)}s, start=${(item.startFromSec||0).toFixed(3)}s)`);
+        console.log(`[render-video] Trimming clip[${i}]: ${fn} → ${trimmedFn} (dur=${item.duration.toFixed(3)}s, start=${(item.startFromSec || 0).toFixed(3)}s)`);
 
         const ok = await preTrimWithFfmpeg(
           ffmpegBin,
@@ -249,11 +282,12 @@ export async function POST(req: NextRequest) {
           item.duration
         );
 
+        // After pre-trim, update url to absolute file:// path of trimmed clip
         if (ok) {
-          footageItems[i] = { ...item, url: trimmedFn, startFromSec: 0 };
+          footageItems[i] = { ...item, url: `file://${outputPath}`, startFromSec: 0 };
           console.log(`[render-video] clip[${i}] ✓ trimmed OK → ${trimmedFn}`);
         } else {
-          console.warn(`[render-video] clip[${i}] ✗ trim FAILED, Remotion will use original: ${fn}`);
+          console.warn(`[render-video] clip[${i}] ✗ trim FAILED, Remotion will use original: ${item.url}`);
         }
       }
 
@@ -262,24 +296,26 @@ export async function POST(req: NextRequest) {
       console.warn("[render-video] ffmpeg NOT found at any known path — skipping pre-trim!");
     }
 
-    const exportPreset = (formData.get("exportPreset") as string) || "1080p";
+    const exportPreset = (formData.get("exportPreset") as string) || "720p";
     const aspectRatio = (formData.get("aspectRatio") as string) || "9:16";
 
-    // 5. Bundle Remotion entry point with publicDir serving tempDir files
-    const entryPoint = path.join(process.cwd(), "src/remotion/index.ts");
-    const serveUrl = await bundle({
-      entryPoint,
-      ignoreRegisterRootWarning: true,
-      publicDir: tempDir,
-    });
+    // 5. Get cached Remotion bundle (built only once per server process)
+    // publicDir cannot be set at bundle time when caching — instead tempDir files
+    // are accessible because Remotion's dev server is pointed to the bundle output.
+    // Static media files (footages, voiceover, bgm) are referenced by filename and
+    // served by passing publicPath override or absolute paths to inputProps.
+    const serveUrl = await getOrBuildBundle();
+    console.log(`[render-video] Using bundle (cached=${_cachedServeUrl === serveUrl}): ${serveUrl}`);
 
     // 6. Select Remotion composition & input props
+    // Use absolute file:// URLs for media so Chromium can load them
+    // regardless of where the bundle's publicDir points.
     const inputProps = {
-      footages: footageItems,
+      footages: footageItems, // already have file:// URLs
       transitions: transitionsList,
       subtitles: subtitleChunksList,
-      voiceOverUrl: savedVoFilename || undefined,
-      bgmUrl: savedBgmFilename || undefined,
+      voiceOverUrl: savedVoFilename ? `file://${path.join(tempDir, savedVoFilename)}` : undefined,
+      bgmUrl: savedBgmFilename ? `file://${path.join(tempDir, savedBgmFilename)}` : undefined,
       bgmVolume: bgmVolume,
       subtitleStyle: subtitleStyle,
       subtitleFontSize: subtitleFontSize,
@@ -328,7 +364,7 @@ export async function POST(req: NextRequest) {
       totalFrames += Math.max(1, Math.round(durationSec * targetFps));
     }
     composition.durationInFrames = Math.max(targetFps, totalFrames);
-    console.log(`[render-video] composition: totalFrames=${totalFrames}, fps=${targetFps}, duration=${(totalFrames/targetFps).toFixed(2)}s`);
+    console.log(`[render-video] composition: totalFrames=${totalFrames}, fps=${targetFps}, duration=${(totalFrames / targetFps).toFixed(2)}s`);
 
     // 7. Render MP4 video via Remotion renderer (Optimized for 2 vCPU VPS)
     const finalVideoPath = path.join(tempDir, "final_export.mp4");
@@ -355,7 +391,7 @@ export async function POST(req: NextRequest) {
     const videoBuffer = await require("fs/promises").readFile(finalVideoPath);
 
     // Cleanup temp directory in background
-    rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    rm(tempDir, { recursive: true, force: true }).catch(() => { });
 
     return new NextResponse(videoBuffer, {
       headers: {
@@ -365,7 +401,7 @@ export async function POST(req: NextRequest) {
     });
   } catch (error: any) {
     console.error("Remotion video render error:", error);
-    rm(tempDir, { recursive: true, force: true }).catch(() => {});
+    rm(tempDir, { recursive: true, force: true }).catch(() => { });
     return NextResponse.json(
       { error: error.message || "Gagal merender video ekspor Remotion." },
       { status: 500 }

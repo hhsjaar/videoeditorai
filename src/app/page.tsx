@@ -171,7 +171,7 @@ export default function CapCutWebStudio() {
   // Export State
   const [isExporting, setIsExporting] = useState<boolean>(false);
   const [exportProgress, setExportProgress] = useState<number>(0);
-  const [exportPreset, setExportPreset] = useState<string>("1080p");
+  const [exportPreset, setExportPreset] = useState<string>("720p");
   const [exportedVideoUrl, setExportedVideoUrl] = useState<string | null>(null);
 
   // AI Chat Assistant State (Trainee Knowledge Engine)
@@ -964,13 +964,21 @@ export default function CapCutWebStudio() {
         setExportProgress(96);
 
         if (!res.ok) {
-          let errMsg = "Gagal mengekspor video.";
+          // Clone before any read — body stream can only be consumed once.
+          // We clone so we can try JSON first, then fall back to raw text safely.
+          const resClone = res.clone();
+          let errMsg = `Gagal mengekspor video (HTTP ${res.status}).`;
           try {
-            const errData = await res.json();
-            errMsg = errData.error || errMsg;
+            const contentType = res.headers.get("content-type") || "";
+            if (contentType.includes("application/json")) {
+              const errData = await res.json();
+              errMsg = errData.error || errMsg;
+            } else {
+              const rawText = await resClone.text();
+              errMsg = rawText ? `Server Error (${res.status}): ${rawText.slice(0, 200)}` : errMsg;
+            }
           } catch {
-            const rawText = await res.text();
-            errMsg = rawText ? `Server Error (${res.status}): ${rawText.slice(0, 150)}` : `Server Error (${res.status})`;
+            // If all reads fail, keep the generic message with status code
           }
           throw new Error(errMsg);
         }
@@ -1942,7 +1950,7 @@ export default function CapCutWebStudio() {
                       className="bg-transparent text-amber-300 font-bold text-[11px] outline-none cursor-pointer"
                     >
                       <option value="1080p">🌟 1080p FHD (60 FPS)</option>
-                      <option value="720p">⚡ 720p HD (30 FPS)</option>
+                      <option value="720p">⚡ 720p HD (30 FPS) ✓</option>
                       <option value="480p">🚀 480p SD (30 FPS)</option>
                     </select>
                   </div>
