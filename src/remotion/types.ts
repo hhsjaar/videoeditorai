@@ -17,10 +17,23 @@ export interface SubtitleChunk {
   end: number; // in seconds
 }
 
+export interface OverlayItem {
+  url: string;          // filename (resolved to http URL by mini server)
+  position: "topleft" | "topright" | "bottomleft" | "bottomright" | "center" | "custom";
+  sizePercent: number;  // 10-80% of video width
+  opacity: number;      // 0.1 - 1.0
+  startSec: number;     // when overlay appears (0 = from start)
+  endSec: number;       // when overlay disappears (-1 = till end)
+  isVideo: boolean;
+  x?: number;           // custom x% (0-100), used when position=custom
+  y?: number;           // custom y% (0-100), used when position=custom
+}
+
 export interface MainCompositionProps {
   footages: FootageItem[];
   transitions: TransitionItem[];
   subtitles: SubtitleChunk[];
+  overlays?: OverlayItem[];
   voiceOverUrl?: string;
   bgmUrl?: string;
   bgmVolume?: number;

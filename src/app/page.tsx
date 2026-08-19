@@ -115,7 +115,7 @@ export default function CapCutWebStudio() {
   const [viewMode, setViewMode] = useState<"wizard" | "studio">("wizard");
   const [includeEndingCover, setIncludeEndingCover] = useState<boolean>(true);
 
-  const [activeNavTab, setActiveNavTab] = useState<"generate" | "video" | "photo" | "audio" | "text" | "effects" | "caption" | "filter">("video");
+  const [activeNavTab, setActiveNavTab] = useState<"generate" | "video" | "photo" | "audio" | "text" | "effects" | "caption" | "filter" | "overlay">("video");
   const [aspectRatio, setAspectRatio] = useState<"9:16" | "16:9" | "1:1">("9:16");
 
   // Timeline Zoom Level (1x to 5x)
@@ -164,7 +164,28 @@ export default function CapCutWebStudio() {
   // AI Copilot confirmation modal for heavy actions (Fitur 3)
   const [copilotConfirm, setCopilotConfirm] = useState<{ message: string; action: any } | null>(null);
 
+  // ─── Overlay Layer State ─────────────────────────────────────────────────────
+  interface OverlayItem {
+    id: string;
+    file: File;
+    previewUrl: string;
+    name: string;
+    position: "topleft" | "topright" | "bottomleft" | "bottomright" | "center";
+    sizePercent: number;   // 10–80 % of video width
+    opacity: number;       // 0.1–1.0
+    startSec: number;      // when it appears (0 = start)
+    endSec: number;        // when it disappears (-1 = till end)
+    isVideo: boolean;
+  }
+  const [overlayItems, setOverlayItems] = useState<OverlayItem[]>([]);
+  const [selectedOverlayId, setSelectedOverlayId] = useState<string | null>(null);
+
+  // ─── Drag & Drop Clips ───────────────────────────────────────────────────────
+  const [draggedClipIdx, setDraggedClipIdx] = useState<number | null>(null);
+  const [dragOverClipIdx, setDragOverClipIdx] = useState<number | null>(null);
+
   // Transitions state
+
   const [transitionsMap, setTransitionsMap] = useState<{ [afterIndex: number]: string }>({});
 
   // BGM state
@@ -348,6 +369,96 @@ export default function CapCutWebStudio() {
     preMatchFootageOrder.forEach((f, i) => { newDurMap[i] = f.duration; });
     setCustomClipDurations(newDurMap);
   };
+
+  // ─── Overlay Handlers ────────────────────────────────────────────────────────
+  const handleOverlayUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    files.forEach(file => {
+      const isVideo = file.type.startsWith("video/");
+      const newOverlay = {
+        id: `overlay_${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        file,
+        previewUrl: URL.createObjectURL(file),
+        name: file.name,
+        position: "topright" as const,
+        sizePercent: 25,
+        opacity: 0.9,
+        startSec: 0,
+        endSec: -1,
+        isVideo,
+      };
+      setOverlayItems(prev => [...prev, newOverlay]);
+      setSelectedOverlayId(newOverlay.id);
+    });
+    e.target.value = "";
+  };
+
+  const handleRemoveOverlay = (id: string) => {
+    setOverlayItems(prev => prev.filter(o => o.id !== id));
+    setSelectedOverlayId(prev => prev === id ? null : prev);
+  };
+
+  const handleUpdateOverlay = (id: string, updates: Partial<{ position: "topleft" | "topright" | "bottomleft" | "bottomright" | "center"; sizePercent: number; opacity: number; startSec: number; endSec: number }>) => {
+    setOverlayItems(prev => prev.map(o => o.id === id ? { ...o, ...updates } : o));
+  };
+
+  // ─── Drag & Drop Clip Reordering ─────────────────────────────────────────────
+  const isEndingClip = (f: UploadedFootage) =>
+    f.name.includes("Cover Akhiran") || f.name.includes("Akhiran") || f.name.includes("ending");
+
+  const handleClipDragStart = (e: React.DragEvent, idx: number) => {
+    if (isEndingClip(footages[idx])) { e.preventDefault(); return; } // Lock Cover Akhiran
+    setDraggedClipIdx(idx);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", String(idx));
+  };
+
+  const handleClipDragOver = (e: React.DragEvent, idx: number) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (isEndingClip(footages[idx])) return; // Cannot drop onto Cover Akhiran
+    setDragOverClipIdx(idx);
+  };
+
+  const handleClipDragEnd = () => {
+    setDraggedClipIdx(null);
+    setDragOverClipIdx(null);
+  };
+
+  const handleClipDrop = (e: React.DragEvent, targetIdx: number) => {
+    e.preventDefault();
+    const sourceIdx = draggedClipIdx;
+    setDraggedClipIdx(null);
+    setDragOverClipIdx(null);
+
+    if (sourceIdx === null || sourceIdx === targetIdx) return;
+    if (isEndingClip(footages[targetIdx])) return; // Cannot drop onto Cover Akhiran
+
+    pushHistoryState();
+
+    // Reorder footages
+    const newFootages = [...footages];
+    const [removed] = newFootages.splice(sourceIdx, 1);
+    newFootages.splice(targetIdx, 0, removed);
+    setFootages(newFootages);
+
+    // Remap customClipDurations to match new order
+    const newDurMap: { [key: number]: number } = {};
+    newFootages.forEach((_, newIdx) => {
+      const oldIdx = footages.indexOf(newFootages[newIdx]);
+      newDurMap[newIdx] = customClipDurations[oldIdx] || clipDuration;
+    });
+    setCustomClipDurations(newDurMap);
+
+    // Remap transitionsMap: transitions are anchored to position, rebuild from scratch
+    const newTransMap: { [key: number]: string } = {};
+    // Carry over transitions by position (keep flash-white before ending)
+    const endingNewIdx = newFootages.findIndex(f => isEndingClip(f));
+    if (endingNewIdx > 0) newTransMap[endingNewIdx - 1] = "flash-white";
+    setTransitionsMap(newTransMap);
+  };
+
+
 
   // ─── Helper: Cover Akhiran selalu pakai flash-white ─────────────────────────
   // Dipanggil setelah setiap perubahan transitionsMap agar transisi sebelum
@@ -1306,6 +1417,20 @@ export default function CapCutWebStudio() {
       const startFromSecList = previewFootages.map((f) => f.startFromSec || 0);
       formData.append("startFromSecList", JSON.stringify(startFromSecList));
 
+      // Overlay files + metadata
+      if (overlayItems.length > 0) {
+        const overlayMeta = overlayItems.map(o => ({
+          position: o.position,
+          sizePercent: o.sizePercent,
+          opacity: o.opacity,
+          startSec: o.startSec,
+          endSec: o.endSec,
+          isVideo: o.isVideo,
+        }));
+        formData.append("overlayMetaJson", JSON.stringify(overlayMeta));
+        overlayItems.forEach(o => formData.append("overlayFiles", o.file));
+      }
+
       // Submit job — server returns jobId immediately
       const res = await fetch("/api/render-video", {
         method: "POST",
@@ -1861,8 +1986,9 @@ export default function CapCutWebStudio() {
                 { id: "video", label: "Video", icon: VideoIcon },
                 { id: "photo", label: "Photo", icon: ImageIcon },
                 { id: "audio", label: "Audio", icon: Music },
+                { id: "overlay", label: "Overlay", icon: Layers },
                 { id: "text", label: "Text", icon: Type },
-                { id: "effects", label: "Effects", icon: Layers },
+                { id: "effects", label: "Effects", icon: Zap },
                 { id: "caption", label: "Caption", icon: Subtitles },
                 { id: "filter", label: "Filter", icon: Sliders },
               ].map((nav) => {
@@ -2271,6 +2397,165 @@ export default function CapCutWebStudio() {
                     </div>
                   </div>
                 )}
+
+                {/* TAB: OVERLAY LAYER */}
+                {activeNavTab === "overlay" && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-300">Layer Overlay</span>
+                      <span className="text-[10px] text-slate-400">Foto / Video</span>
+                    </div>
+
+                    {/* Upload Button */}
+                    <label className="w-full py-3 bg-gradient-to-br from-violet-600/20 to-indigo-600/20 hover:from-violet-600/30 hover:to-indigo-600/30 border border-violet-500/30 hover:border-violet-400/50 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 cursor-pointer transition-all">
+                      <Plus className="w-4 h-4 text-violet-400" />
+                      <span className="text-violet-200">Upload Overlay</span>
+                      <input
+                        type="file"
+                        className="hidden"
+                        multiple
+                        accept="image/*,video/*"
+                        onChange={handleOverlayUpload}
+                      />
+                    </label>
+
+                    {overlayItems.length === 0 && (
+                      <div className="py-8 flex flex-col items-center gap-2 text-slate-500">
+                        <Layers className="w-8 h-8 opacity-30" />
+                        <p className="text-[10px] text-center">Upload foto/video untuk ditempel<br/>di atas video utama (logo, PiP, dll)</p>
+                      </div>
+                    )}
+
+                    {/* Overlay List */}
+                    {overlayItems.map((overlay) => {
+                      const isSelected = selectedOverlayId === overlay.id;
+                      const POSITION_GRID = [
+                        ["topleft", "⬛", "topright"],
+                        ["", "center", ""],
+                        ["bottomleft", "⬛", "bottomright"],
+                      ] as const;
+
+                      return (
+                        <div
+                          key={overlay.id}
+                          className={`rounded-xl border transition-all overflow-hidden ${isSelected ? "border-violet-500/60 bg-[#1c1a2e]" : "border-[#27272a] bg-[#09090b]"}`}
+                        >
+                          {/* Header */}
+                          <div
+                            className="flex items-center gap-2 p-2 cursor-pointer"
+                            onClick={() => setSelectedOverlayId(isSelected ? null : overlay.id)}
+                          >
+                            {overlay.isVideo ? (
+                              <div className="w-10 h-7 bg-black rounded flex items-center justify-center flex-shrink-0 border border-[#27272a]">
+                                <VideoIcon className="w-3 h-3 text-violet-400" />
+                              </div>
+                            ) : (
+                              <img src={overlay.previewUrl} alt={overlay.name} className="w-10 h-7 object-cover rounded flex-shrink-0 border border-[#27272a]" />
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <p className="text-[10px] font-semibold text-slate-200 truncate">{overlay.name}</p>
+                              <p className="text-[9px] text-slate-500">{overlay.position} · {overlay.sizePercent}% · {Math.round(overlay.opacity * 100)}%</p>
+                            </div>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); handleRemoveOverlay(overlay.id); }}
+                              className="p-1 hover:bg-red-500/20 rounded text-red-400 flex-shrink-0"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+
+                          {/* Expanded Controls */}
+                          {isSelected && (
+                            <div className="px-2.5 pb-2.5 space-y-2.5 border-t border-[#27272a] pt-2">
+
+                              {/* Position Grid 3x3 */}
+                              <div>
+                                <p className="text-[9px] text-slate-400 mb-1.5">Posisi</p>
+                                <div className="grid grid-cols-3 gap-1 w-[90px]">
+                                  {[
+                                    { id: "topleft", label: "↖" }, { id: "top", label: "" }, { id: "topright", label: "↗" },
+                                    { id: "left", label: "" },      { id: "center", label: "●" }, { id: "right", label: "" },
+                                    { id: "bottomleft", label: "↙" }, { id: "bottom", label: "" }, { id: "bottomright", label: "↘" },
+                                  ].map((pos) => {
+                                    if (!pos.label) return <div key={pos.id} className="w-6 h-6" />;
+                                    const isPos = overlay.position === pos.id;
+                                    return (
+                                      <button
+                                        key={pos.id}
+                                        onClick={() => handleUpdateOverlay(overlay.id, { position: pos.id as any })}
+                                        className={`w-6 h-6 rounded text-[11px] flex items-center justify-center transition-all ${isPos ? "bg-violet-600 text-white" : "bg-[#27272a] text-slate-300 hover:bg-[#3f3f46]"}`}
+                                      >
+                                        {pos.label}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+
+                              {/* Size */}
+                              <div>
+                                <div className="flex justify-between mb-1">
+                                  <p className="text-[9px] text-slate-400">Ukuran</p>
+                                  <p className="text-[9px] text-violet-300 font-bold">{overlay.sizePercent}%</p>
+                                </div>
+                                <input
+                                  type="range" min={5} max={80} step={1}
+                                  value={overlay.sizePercent}
+                                  onChange={(e) => handleUpdateOverlay(overlay.id, { sizePercent: parseInt(e.target.value) })}
+                                  className="w-full h-1 accent-violet-500"
+                                />
+                              </div>
+
+                              {/* Opacity */}
+                              <div>
+                                <div className="flex justify-between mb-1">
+                                  <p className="text-[9px] text-slate-400">Opacity</p>
+                                  <p className="text-[9px] text-violet-300 font-bold">{Math.round(overlay.opacity * 100)}%</p>
+                                </div>
+                                <input
+                                  type="range" min={10} max={100} step={1}
+                                  value={Math.round(overlay.opacity * 100)}
+                                  onChange={(e) => handleUpdateOverlay(overlay.id, { opacity: parseInt(e.target.value) / 100 })}
+                                  className="w-full h-1 accent-violet-500"
+                                />
+                              </div>
+
+                              {/* Time Range */}
+                              <div className="grid grid-cols-2 gap-2">
+                                <div>
+                                  <p className="text-[9px] text-slate-400 mb-1">Mulai (detik)</p>
+                                  <input
+                                    type="number" min={0} step={0.1}
+                                    value={overlay.startSec}
+                                    onChange={(e) => handleUpdateOverlay(overlay.id, { startSec: parseFloat(e.target.value) || 0 })}
+                                    className="w-full bg-[#27272a] border border-[#3f3f46] rounded text-[10px] text-white px-2 py-1 outline-none focus:border-violet-500"
+                                  />
+                                </div>
+                                <div>
+                                  <p className="text-[9px] text-slate-400 mb-1">Akhir (-1=selamanya)</p>
+                                  <input
+                                    type="number" min={-1} step={0.1}
+                                    value={overlay.endSec}
+                                    onChange={(e) => handleUpdateOverlay(overlay.id, { endSec: parseFloat(e.target.value) || -1 })}
+                                    className="w-full bg-[#27272a] border border-[#3f3f46] rounded text-[10px] text-white px-2 py-1 outline-none focus:border-violet-500"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    {overlayItems.length > 0 && (
+                      <p className="text-[9px] text-slate-500 text-center">
+                        💡 Overlay akan muncul di atas semua klip saat render
+                      </p>
+                    )}
+                  </div>
+                )}
+
+
 
                 {/* TAB: PHOTOS / GAMBAR */}
                 {activeNavTab === "photo" && (
@@ -2685,12 +2970,21 @@ export default function CapCutWebStudio() {
                         return (
                           <div
                             key={clip.id}
+                            draggable={!isEndingClip(clip)}
+                            onDragStart={(e) => handleClipDragStart(e, idx)}
+                            onDragOver={(e) => handleClipDragOver(e, idx)}
+                            onDragEnd={handleClipDragEnd}
+                            onDrop={(e) => handleClipDrop(e, idx)}
                             onClick={() => {
                               setSelectedClipIndex(idx);
                               setSelectedTimelineItem({ type: "video", index: idx });
                             }}
                             style={{ width: `${clipPercent}%` }}
-                            className={`h-full px-0.5 rounded-xl flex items-center justify-between gap-1 text-indigo-200 border transition-all cursor-pointer flex-shrink-0 min-w-[70px] relative group/clip ${isSelected
+                            className={`h-full px-0.5 rounded-xl flex items-center justify-between gap-1 text-indigo-200 border transition-all flex-shrink-0 min-w-[70px] relative group/clip
+                              ${isEndingClip(clip) ? "cursor-not-allowed" : "cursor-grab active:cursor-grabbing"}
+                              ${draggedClipIdx === idx ? "opacity-40 scale-[0.98]" : ""}
+                              ${dragOverClipIdx === idx && draggedClipIdx !== idx ? "border-l-4 border-l-blue-400" : ""}
+                              ${isSelected
                                 ? "border-indigo-400 bg-indigo-900/90 shadow-lg shadow-indigo-600/30 scale-[1.01] ring-2 ring-indigo-500/60 z-20"
                                 : "border-indigo-500/30 bg-gradient-to-r from-indigo-950/80 to-purple-950/80 hover:border-indigo-400"
                               }`}

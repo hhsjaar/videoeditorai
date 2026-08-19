@@ -61,7 +61,7 @@ export const VideoTracks: React.FC<VideoTracksProps> = ({ footages, defaultClipD
 
         const resolvedUrl = resolveMediaSrc(clip.url) || clip.url;
         // Detect images by file extension ONLY — reliable for both preview and exported renders
-        const isImage = clip.url && /\.(png|jpe?g|webp|gif|bmp|tiff?)($|\?)/i.test(clip.url);
+        const isImage = clip.url && /\.(png|jpe?g|webp|gif|bmp|tiff?|heic|heif|avif)($|\?)/i.test(clip.url);
         const startFromFrame = clip.startFromSec && clip.startFromSec > 0 ? Math.round(clip.startFromSec * fps) : undefined;
 
         return (

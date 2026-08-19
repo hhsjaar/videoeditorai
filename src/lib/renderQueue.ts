@@ -45,6 +45,7 @@ export interface RenderJobData {
   footageItems: Array<{ url: string; duration: number; startFromSec: number; colorGrade: string }>;
   transitionsList: Array<{ type: string; afterClipIndex: number; duration: number }>;
   subtitleChunksList: Array<{ text: string; start: number; end: number }>;
+  overlayItems: Array<{ url: string; position: string; sizePercent: number; opacity: number; startSec: number; endSec: number; isVideo: boolean; x?: number; y?: number }>;
   voiceOverUrl: string | undefined;
   bgmUrl: string | undefined;
   bgmVolume: number;
@@ -249,6 +250,7 @@ async function processRender(job: JobState, data: RenderJobData, outputPath: str
       footages: footageItems.map(f => ({ ...f, url: toMediaUrl(f.url)! })),
       transitions: transitionsList,
       subtitles: subtitleChunksList,
+      overlays: (data.overlayItems || []).map(o => ({ ...o, url: toMediaUrl(o.url)! })),
       voiceOverUrl: toMediaUrl(voiceOverUrl),
       bgmUrl: toMediaUrl(bgmUrl),
       bgmVolume,

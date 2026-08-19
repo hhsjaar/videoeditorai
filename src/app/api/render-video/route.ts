@@ -101,6 +101,11 @@ export async function POST(req: NextRequest) {
     let footagesMetaList: Array<{ duration: number; startFromSec: number; colorGrade: string }> = [];
     try { footagesMetaList = JSON.parse((formData.get("footagesMetaJson") as string) || "[]"); } catch { }
 
+    // Overlay files and their metadata
+    const overlayFiles = formData.getAll("overlayFiles") as File[];
+    let overlayMetaList: Array<{ position: string; sizePercent: number; opacity: number; startSec: number; endSec: number; isVideo: boolean; x?: number; y?: number }> = [];
+    try { overlayMetaList = JSON.parse((formData.get("overlayMetaJson") as string) || "[]"); } catch { }
+
     if (footageFiles.length === 0) {
       return NextResponse.json({ error: "Minimal upload 1 klip video." }, { status: 400 });
     }
@@ -208,14 +213,40 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 6. Pre-trim clips with ffmpeg (synchronous, before enqueueing)
+    // 6. Pre-process clips with ffmpeg
     const ffmpegBin = await getCachedFfmpeg();
     if (ffmpegBin) {
       for (let i = 0; i < footageItems.length; i++) {
         const item = footageItems[i];
-        if (/\.(png|jpe?g|webp|gif|bmp|tiff?)$/i.test(item.url)) continue;
+        const isImage = /\.(png|jpe?g|webp|gif|bmp|tiff?|heic|heif|avif)$/i.test(item.url);
 
-        // Derive real filesystem path from http URL
+        if (isImage) {
+          // Convert all images to standard JPEG so Remotion/Chromium can render them
+          // This fixes HEIC (iPhone), AVIF, and any format Chromium doesn't support natively
+          const inputFilename = item.url.split("/").pop()!;
+          const inputPath = path.join(tempDir, inputFilename);
+          const outputFn = `footage_${i}.jpg`;
+          const outputPath = path.join(tempDir, outputFn);
+
+          // Skip conversion if already a standard JPEG/PNG with correct name
+          if (inputFilename === outputFn) continue;
+
+          try {
+            // -vf scale=-2:1920 keeps aspect ratio and ensures even width for Remotion
+            await execAsync(
+              `"${ffmpegBin}" -y -i "${inputPath}" -vf "scale=iw:ih" -q:v 2 "${outputPath}"`,
+              { timeout: 30000 }
+            );
+            footageItems[i] = { ...item, url: outputFn, startFromSec: 0 };
+            console.log(`[render-video] image[${i}] ✓ converted → ${outputFn}`);
+          } catch (convErr: any) {
+            console.warn(`[render-video] image convert failed for ${inputFilename}:`, convErr?.message?.slice(0, 100));
+            // Keep original — Remotion will try its best
+          }
+          continue; // Skip video trim for images
+        }
+
+        // Video: pre-trim with ffmpeg
         const filename = item.url.split("/").pop()!;
         const inputPath = path.join(tempDir, filename);
         const trimmedFn = `clip_${i}_trimmed.mp4`;
@@ -224,19 +255,52 @@ export async function POST(req: NextRequest) {
         console.log(`[render-video] Trimming clip[${i}]: dur=${item.duration.toFixed(3)}s, start=${(item.startFromSec || 0).toFixed(3)}s`);
         const ok = await preTrimWithFfmpeg(ffmpegBin, inputPath, outputPath, item.startFromSec || 0, item.duration);
         if (ok) {
-          // Store trimmed filename only — renderQueue mini server will serve it
           footageItems[i] = { ...item, url: trimmedFn, startFromSec: 0 };
           console.log(`[render-video] clip[${i}] ✓ trimmed → ${trimmedFn}`);
         }
       }
     }
 
-    // 7. Enqueue job — returns immediately, render happens in background
+
+    // 7a. Save overlay files to tempDir
+    const overlayItems: Array<{ url: string; position: string; sizePercent: number; opacity: number; startSec: number; endSec: number; isVideo: boolean; x?: number; y?: number }> = [];
+    for (let i = 0; i < overlayFiles.length; i++) {
+      const file = overlayFiles[i];
+      const meta = overlayMetaList[i] || {};
+      if (!file || file.size === 0) continue;
+      const ext = path.extname(file.name) || ".png";
+      const filename = `overlay_${i}${ext}`;
+      await writeFile(path.join(tempDir, filename), Buffer.from(await file.arrayBuffer()));
+      // Convert image overlays to JPEG if needed
+      const isImage = /\.(png|jpe?g|webp|heic|heif|avif)$/i.test(filename);
+      let finalFn = filename;
+      if (isImage && ffmpegBin) {
+        const jpgFn = `overlay_${i}.jpg`;
+        try {
+          await execAsync(`"${ffmpegBin}" -y -i "${path.join(tempDir, filename)}" -q:v 2 "${path.join(tempDir, jpgFn)}"`, { timeout: 15000 });
+          finalFn = jpgFn;
+        } catch { /* keep original */ }
+      }
+      overlayItems.push({
+        url: finalFn,
+        position: (meta.position as any) || "topright",
+        sizePercent: meta.sizePercent ?? 20,
+        opacity: meta.opacity ?? 1.0,
+        startSec: meta.startSec ?? 0,
+        endSec: meta.endSec ?? -1,
+        isVideo: meta.isVideo ?? !isImage,
+        x: meta.x,
+        y: meta.y,
+      });
+    }
+
+    // 7b. Enqueue job — returns immediately, render happens in background
     enqueueJob(jobId, {
       tempDir,
       footageItems,
       transitionsList,
       subtitleChunksList,
+      overlayItems,
       voiceOverUrl: savedVoFilename ?? undefined,
       bgmUrl: savedBgmFilename ?? undefined,
       bgmVolume,
