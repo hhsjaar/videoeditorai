@@ -42,7 +42,7 @@ export interface JobState {
 
 export interface RenderJobData {
   tempDir: string;
-  footageItems: Array<{ url: string; duration: number; startFromSec: number; colorGrade: string }>;
+  footageItems: Array<{ url: string; duration: number; startFromSec: number; colorGrade: string; isImage?: boolean }>;
   transitionsList: Array<{ type: string; afterClipIndex: number; duration: number }>;
   subtitleChunksList: Array<{ text: string; start: number; end: number }>;
   overlayItems: Array<{ url: string; position: string; sizePercent: number; opacity: number; startSec: number; endSec: number; isVideo: boolean; x?: number; y?: number }>;

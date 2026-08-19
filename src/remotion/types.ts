@@ -3,6 +3,7 @@ export interface FootageItem {
   duration: number; // in seconds
   startFromSec?: number; // start offset in seconds for center-cut trimming
   colorGrade?: string;
+  isImage?: boolean;
 }
 
 export interface TransitionItem {

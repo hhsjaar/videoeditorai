@@ -59,6 +59,7 @@ interface UploadedFootage {
   name: string;
   duration: number;
   startFromSec?: number;
+  isImage?: boolean;
 }
 
 const AVAILABLE_TRANSITIONS = [
@@ -708,6 +709,20 @@ export default function CapCutWebStudio() {
       files.map((file, idx) => {
         return new Promise<UploadedFootage>((resolve) => {
           const previewUrl = URL.createObjectURL(file);
+          const isImg = file.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp|tiff?|heic|heif|avif)$/i.test(file.name);
+          
+          if (isImg) {
+            resolve({
+              id: `${Date.now()}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+              file,
+              previewUrl,
+              name: file.name || `IMG${(idx + 1).toString().padStart(4, "0")}.jpg`,
+              duration: clipDuration,
+              isImage: true,
+            });
+            return;
+          }
+
           const tempVid = document.createElement("video");
           tempVid.src = previewUrl;
           tempVid.onloadedmetadata = () => {
@@ -720,6 +735,7 @@ export default function CapCutWebStudio() {
               previewUrl,
               name: file.name || `VID${(idx + 1).toString().padStart(4, "0")}.mp4`,
               duration: nativeDur,
+              isImage: false,
             });
           };
           tempVid.onerror = () => {
@@ -729,6 +745,7 @@ export default function CapCutWebStudio() {
               previewUrl,
               name: file.name || `VID${(idx + 1).toString().padStart(4, "0")}.mp4`,
               duration: clipDuration,
+              isImage: false,
             });
           };
         });
@@ -756,6 +773,7 @@ export default function CapCutWebStudio() {
       name: file.name,
       previewUrl: URL.createObjectURL(file),
       duration: 3.0,
+      isImage: true,
     }));
 
     pushHistoryState();
@@ -1129,6 +1147,7 @@ export default function CapCutWebStudio() {
           name: "Cover Akhiran (Ending Video)",
           previewUrl: "/akhiran/ending.png",
           duration: 3.0,
+          isImage: true,
         };
 
         setFootages((prev) => {
@@ -1412,7 +1431,7 @@ export default function CapCutWebStudio() {
 
       // Pass exact preview subtitles & footage metadata from studio workspace
       formData.append("subtitlesJson", JSON.stringify(previewSubtitles));
-      formData.append("footagesMetaJson", JSON.stringify(previewFootages.map((f) => ({ duration: f.duration, startFromSec: f.startFromSec || 0, colorGrade: f.colorGrade }))));
+      formData.append("footagesMetaJson", JSON.stringify(previewFootages.map((f) => ({ duration: f.duration, startFromSec: f.startFromSec || 0, colorGrade: f.colorGrade, isImage: f.isImage }))));
 
       const startFromSecList = previewFootages.map((f) => f.startFromSec || 0);
       formData.append("startFromSecList", JSON.stringify(startFromSecList));
@@ -2048,33 +2067,46 @@ export default function CapCutWebStudio() {
                       </div>
                     ) : (
                       <div className="grid grid-cols-2 gap-2">
-                        {footages.map((clip, idx) => (
-                          <div
-                            key={clip.id}
-                            onClick={() => setSelectedClipIndex(idx)}
-                            className={`rounded-xl overflow-hidden border bg-[#09090b] relative group cursor-pointer transition-all ${selectedClipIndex === idx ? "border-indigo-500 ring-2 ring-indigo-500/50" : "border-[#27272a] hover:border-slate-500"
-                              }`}
-                          >
-                            <div className="w-full aspect-video bg-black relative overflow-hidden">
-                              <video src={clip.previewUrl} className="w-full h-full object-cover" />
-                              <div className="absolute top-1.5 right-1.5 w-4 h-4 rounded bg-black/60 border border-white/40 flex items-center justify-center">
-                                {selectedClipIndex === idx && <Check className="w-3 h-3 text-white" />}
+                        {footages.map((clip, idx) => {
+                          const isImg = clip.isImage || clip.file?.type?.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp|tiff?|heic|heif|avif)$/i.test(clip.name) || clip.name.includes("Cover Akhiran");
+                          return (
+                            <div
+                              key={clip.id}
+                              onClick={() => setSelectedClipIndex(idx)}
+                              className={`rounded-xl overflow-hidden border bg-[#09090b] relative group cursor-pointer transition-all ${selectedClipIndex === idx ? "border-indigo-500 ring-2 ring-indigo-500/50" : "border-[#27272a] hover:border-slate-500"
+                                }`}
+                            >
+                              <div className="w-full aspect-video bg-black relative overflow-hidden">
+                                {isImg ? (
+                                  <img
+                                    src={clip.previewUrl}
+                                    className="w-full h-full object-cover"
+                                    onError={(e) => {
+                                      (e.target as HTMLElement).style.display = "none";
+                                    }}
+                                  />
+                                ) : (
+                                  <video src={clip.previewUrl} className="w-full h-full object-cover" />
+                                )}
+                                <div className="absolute top-1.5 right-1.5 w-4 h-4 rounded bg-black/60 border border-white/40 flex items-center justify-center">
+                                  {selectedClipIndex === idx && <Check className="w-3 h-3 text-white" />}
+                                </div>
+                              </div>
+                              <div className="p-2 flex items-center justify-between">
+                                <p className="text-[10px] font-bold text-slate-200 truncate">{clip.name}</p>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    removeFootage(clip.id);
+                                  }}
+                                  className="text-rose-400 hover:text-rose-300 p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
                               </div>
                             </div>
-                            <div className="p-2 flex items-center justify-between">
-                              <p className="text-[10px] font-bold text-slate-200 truncate">{clip.name}</p>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  removeFootage(clip.id);
-                                }}
-                                className="text-rose-400 hover:text-rose-300 p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -2999,7 +3031,7 @@ export default function CapCutWebStudio() {
                             </div>
 
                             <div className="w-8 h-10 rounded bg-black overflow-hidden flex-shrink-0 border border-slate-800 pointer-events-none">
-                              {clip.previewUrl.match(/\.(png|jpe?g|webp|gif|heic|heif)($|\?)/i) || clip.name.includes("Cover Akhiran") ? (
+                              {clip.isImage || clip.file?.type?.startsWith("image/") || clip.previewUrl.match(/\.(png|jpe?g|webp|gif|bmp|tiff?|heic|heif|avif)($|\?)/i) || clip.name.match(/\.(png|jpe?g|webp|gif|bmp|tiff?|heic|heif|avif)$/i) || clip.name.includes("Cover Akhiran") ? (
                                 <img
                                   src={clip.previewUrl}
                                   className="w-full h-full object-cover"

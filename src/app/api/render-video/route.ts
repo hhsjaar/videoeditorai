@@ -98,7 +98,7 @@ export async function POST(req: NextRequest) {
     let subtitleChunksList: Array<{ text: string; start: number; end: number }> = [];
     try { subtitleChunksList = JSON.parse((formData.get("subtitlesJson") as string) || "[]"); } catch { }
 
-    let footagesMetaList: Array<{ duration: number; startFromSec: number; colorGrade: string }> = [];
+    let footagesMetaList: Array<{ duration: number; startFromSec: number; colorGrade: string; isImage?: boolean }> = [];
     try { footagesMetaList = JSON.parse((formData.get("footagesMetaJson") as string) || "[]"); } catch { }
 
     // Overlay files and their metadata
@@ -162,11 +162,13 @@ export async function POST(req: NextRequest) {
       const meta = footagesMetaList[i] || {};
       const dur = meta.duration || (clipDurationsList[i] > 0 ? clipDurationsList[i] : defaultTrimSec);
       const startSec = meta.startFromSec !== undefined ? meta.startFromSec : (startFromSecList[i] || 0);
+      const isImg = meta.isImage ?? /\.(png|jpe?g|webp|gif|bmp|tiff?|heic|heif|avif)$/i.test(fn);
       return {
         url: fn,
         duration: dur,
         startFromSec: startSec,
         colorGrade: meta.colorGrade || editingStyle,
+        isImage: isImg,
       };
     });
 
