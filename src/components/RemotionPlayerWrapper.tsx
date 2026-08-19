@@ -84,6 +84,18 @@ export const RemotionPlayerWrapper: React.FC<PlayerProps> = ({
       fps={60}
       compositionWidth={1080}
       compositionHeight={1920}
+      acknowledgeRemotionLicense
+      errorFallback={(error) => (
+        <div className="w-full h-full flex flex-col items-center justify-center bg-slate-950 p-6 text-center">
+          <div className="w-12 h-12 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center mb-3 text-xl font-bold">
+            ⚠️
+          </div>
+          <p className="text-sm font-bold text-slate-200 mb-1">Media Preview Notice</p>
+          <p className="text-xs text-slate-400 max-w-md">
+            {error.message || "Beberapa klip video (format MOV/HEVC) tidak dapat diputar langsung di browser, tetapi akan tetap ter-render sempurna saat diexport ke MP4."}
+          </p>
+        </div>
+      )}
       style={{
         width: "100%",
         height: "100%",

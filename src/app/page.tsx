@@ -1479,11 +1479,21 @@ export default function CapCutWebStudio() {
   const previewFootages: FootageItem[] = useMemo(() => {
     return footages.map((f, idx) => {
       const dur = customClipDurations[idx] || clipDuration;
+      const isImg = Boolean(
+        f.isImage ||
+        f.file?.type?.startsWith("image/") ||
+        /\.(png|jpe?g|webp|gif|bmp|tiff?|heic|heif|avif)$/i.test(f.name) ||
+        /\.(png|jpe?g|webp|gif|bmp|tiff?|heic|heif|avif)($|\?)/i.test(f.previewUrl) ||
+        f.name.includes("Cover Akhiran") ||
+        f.name.includes("ending") ||
+        f.name.includes("akhiran")
+      );
       return {
         url: f.previewUrl,
         duration: dur,
         startFromSec: f.startFromSec || 0,
         colorGrade: editingStyle,
+        isImage: isImg,
       };
     });
   }, [footages, customClipDurations, clipDuration, editingStyle]);
