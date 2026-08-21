@@ -5,6 +5,7 @@ import { VideoTracks } from "./components/VideoTracks";
 import { OverlayTransitions } from "./components/OverlayTransitions";
 import { SubtitleOverlay } from "./components/SubtitleOverlay";
 import { OverlayLayer } from "./components/OverlayLayer";
+import { TitleOverlay } from "./components/TitleOverlay";
 import { resolveMediaSrc } from "./utils";
 
 export const MainComposition: React.FC<MainCompositionProps> = ({
@@ -12,6 +13,7 @@ export const MainComposition: React.FC<MainCompositionProps> = ({
   transitions = [],
   subtitles = [],
   overlays = [],
+  titleConfig,
   voiceOverUrl,
   bgmUrl,
   bgmVolume = 0.2,
@@ -39,14 +41,18 @@ export const MainComposition: React.FC<MainCompositionProps> = ({
       {/* 3. Overlay Layer (PiP, watermark, logo, etc.) */}
       <OverlayLayer overlays={overlays} fps={fps} totalDurationSec={totalDurationSec} />
 
-      {/* 4. Subtitles Overlay Track */}
+      {/* 4. Title Opening Overlay Track (Reel Aesthetic Title with In/Out Animations) */}
+      <TitleOverlay titleConfig={titleConfig} fps={fps} />
+
+      {/* 5. Subtitles Overlay Track */}
       <SubtitleOverlay subtitles={subtitles} fps={fps} subtitleStyle={subtitleStyle} subtitleFontSize={subtitleFontSize} subtitleBottomPos={subtitleBottomPos} />
 
-      {/* 5. Voice Over Audio Track */}
+      {/* 6. Voice Over Audio Track */}
       {resolvedVo && <Audio src={resolvedVo} volume={1.0} />}
 
-      {/* 6. Background Music Audio Track */}
+      {/* 7. Background Music Audio Track */}
       {resolvedBgm && <Audio src={resolvedBgm} volume={bgmVolume} loop />}
     </div>
   );
 };
+

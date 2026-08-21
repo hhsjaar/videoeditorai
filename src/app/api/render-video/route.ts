@@ -101,6 +101,12 @@ export async function POST(req: NextRequest) {
     let footagesMetaList: Array<{ duration: number; startFromSec: number; colorGrade: string; isImage?: boolean }> = [];
     try { footagesMetaList = JSON.parse((formData.get("footagesMetaJson") as string) || "[]"); } catch { }
 
+    let titleConfig: any = undefined;
+    try {
+      const rawTitle = formData.get("titleConfigJson") as string;
+      if (rawTitle) titleConfig = JSON.parse(rawTitle);
+    } catch { }
+
     // Overlay files and their metadata
     const overlayFiles = formData.getAll("overlayFiles") as File[];
     let overlayMetaList: Array<{ position: string; sizePercent: number; opacity: number; startSec: number; endSec: number; isVideo: boolean; x?: number; y?: number }> = [];
@@ -303,6 +309,7 @@ export async function POST(req: NextRequest) {
       transitionsList,
       subtitleChunksList,
       overlayItems,
+      titleConfig,
       voiceOverUrl: savedVoFilename ?? undefined,
       bgmUrl: savedBgmFilename ?? undefined,
       bgmVolume,

@@ -45,7 +45,7 @@ import {
   Send,
   MessageSquare,
 } from "lucide-react";
-import { MainCompositionProps, FootageItem, TransitionItem, SubtitleChunk } from "../remotion/types";
+import { MainCompositionProps, FootageItem, TransitionItem, SubtitleChunk, TitleOverlayConfig } from "../remotion/types";
 
 const RemotionPlayerWrapper = dynamic(
   () => import("../components/RemotionPlayerWrapper").then((m) => m.RemotionPlayerWrapper),
@@ -112,6 +112,26 @@ const AVAILABLE_FILTERS = [
   { id: "editorial-commercial", title: "📸 Editorial Commercial", desc: "Clean, refined, fashion-like", rating: "⭐⭐⭐⭐⭐" },
 ];
 
+const TITLE_IN_ANIMATIONS = [
+  { id: "spring-pop", label: "Elastic Pop & Glow", desc: "Membal elastis + kilau cahaya", icon: "✨" },
+  { id: "kinetic-zoom", label: "Kinetic Slam Zoom", desc: "Zoom cepat 1.45x membentur", icon: "⚡" },
+  { id: "slide-up", label: "Kinetic Slide Up", desc: "Meluncur naik dari bawah", icon: "⬆️" },
+  { id: "stagger-cascade", label: "3D Stagger Cascade", desc: "Teks turun berurutan 1-2-3", icon: "🪜" },
+  { id: "mask-reveal", label: "Cinematic Mask Wipe", desc: "Sapuan tirai sinematik mulus", icon: "🎬" },
+  { id: "neon-flash", label: "Cyber Neon Flash", desc: "Kelap-kelip neon & strobe", icon: "💡" },
+  { id: "flip-drop", label: "3D Perspective Flip", desc: "Putar 3D jatuh membal", icon: "🔄" },
+  { id: "blur-fade", label: "Cinematic Blur Fade", desc: "Defokus blur ke tajam 4K", icon: "🌫️" },
+];
+
+const TITLE_OUT_ANIMATIONS = [
+  { id: "blur-dissolve", label: "Blur Dissolve", desc: "Blur mengembang lembut", icon: "🌫️" },
+  { id: "slide-up-out", label: "Fast Slide Up", desc: "Melesat cepat ke atas", icon: "🚀" },
+  { id: "slide-down-out", label: "Slide Down Fade", desc: "Meluncur turun ke bawah", icon: "⬇️" },
+  { id: "scale-fade", label: "Scale Shrink Sink", desc: "Mengecil tenggelam", icon: "🔍" },
+  { id: "zoom-explode", label: "Flash Zoom Explode", desc: "Meledak maju ke kamera", icon: "💥" },
+  { id: "flip-out", label: "3D Perspective Flip", desc: "Putar 3D menjauh", icon: "🔄" },
+];
+
 export default function CapCutWebStudio() {
   const [viewMode, setViewMode] = useState<"wizard" | "studio">("wizard");
   const [includeEndingCover, setIncludeEndingCover] = useState<boolean>(true);
@@ -131,7 +151,7 @@ export default function CapCutWebStudio() {
   const [clipDuration, setClipDuration] = useState<number>(3.0);
   const [customClipDurations, setCustomClipDurations] = useState<{ [key: number]: number }>({});
   const [selectedClipIndex, setSelectedClipIndex] = useState<number | null>(null);
-  const [selectedTimelineItem, setSelectedTimelineItem] = useState<{ type: "video" | "voiceover" | "bgm" | "subtitle" | "transition"; index?: number } | null>(null);
+  const [selectedTimelineItem, setSelectedTimelineItem] = useState<{ type: "video" | "voiceover" | "bgm" | "subtitle" | "transition" | "title"; index?: number } | null>(null);
   const [copiedClip, setCopiedClip] = useState<UploadedFootage | null>(null);
 
   // Playhead & Scrubber state (Dynamic Frame Sync)
@@ -201,6 +221,24 @@ export default function CapCutWebStudio() {
   const [subtitleFontSize, setSubtitleFontSize] = useState<number>(44);
   const [subtitleBottomPos, setSubtitleBottomPos] = useState<number>(220);
   const [isGeneratingConcept, setIsGeneratingConcept] = useState<boolean>(false);
+
+  // Title / Opening Header State (Reels Multi-Line Aesthetic Title with In/Out Animation)
+  const [titleConfig, setTitleConfig] = useState<TitleOverlayConfig>({
+    enabled: true,
+    line1: "Renovasi",
+    line2: "Coffee Bar",
+    subtitle: "burjolevelup",
+    style: "reel-aesthetic",
+    italicLine2: true,
+    fontSize: 84,
+    fontColor: "#FFFFFF",
+    positionY: 40,
+    startSec: 0,
+    durationSec: 3.8,
+    animationIn: "spring-pop",
+    animationOut: "blur-dissolve",
+  });
+  const [textTabSection, setTextTabSection] = useState<"title" | "subtitle">("title");
 
   // Export State
   const [isExporting, setIsExporting] = useState<boolean>(false);
@@ -883,6 +921,8 @@ export default function CapCutWebStudio() {
     } else if (selectedTimelineItem.type === "subtitle") {
       setRawScript("");
       setPolishedScript("");
+    } else if (selectedTimelineItem.type === "title") {
+      setTitleConfig((prev) => ({ ...prev, enabled: false }));
     } else if (selectedTimelineItem.type === "transition" && selectedTimelineItem.index !== undefined) {
       const idx = selectedTimelineItem.index;
       setTransitionsMap((prev) => {
@@ -1324,6 +1364,68 @@ export default function CapCutWebStudio() {
     }
   };
 
+  // Auto Generate Punchy Reel Title from Script
+  const handleAutoGenerateTitle = () => {
+    const text = (polishedScript || rawScript || customTextOverlay).trim();
+    if (!text) {
+      setTitleConfig((prev) => ({
+        ...prev,
+        enabled: true,
+        line1: "Renovasi",
+        line2: "Coffee Bar",
+        subtitle: "burjolevelup",
+      }));
+      return;
+    }
+
+    // Clean text and extract first meaningful clause
+    const cleanSentence = text.replace(/^[0-9]+[.)]\s*/, "").split(/[.!?\n]/)[0].trim();
+    const words = cleanSentence.split(/\s+/).filter(Boolean);
+
+    if (words.length <= 1) {
+      setTitleConfig((prev) => ({
+        ...prev,
+        enabled: true,
+        line1: words[0] || "Promo",
+        line2: "Spesial Hari Ini",
+        subtitle: "burjolevelup",
+      }));
+    } else if (words.length === 2) {
+      setTitleConfig((prev) => ({
+        ...prev,
+        enabled: true,
+        line1: words[0],
+        line2: words[1],
+        subtitle: "burjolevelup",
+      }));
+    } else if (words.length === 3) {
+      setTitleConfig((prev) => ({
+        ...prev,
+        enabled: true,
+        line1: words[0],
+        line2: `${words[1]} ${words[2]}`,
+        subtitle: "burjolevelup",
+      }));
+    } else if (words.length === 4) {
+      setTitleConfig((prev) => ({
+        ...prev,
+        enabled: true,
+        line1: `${words[0]} ${words[1]}`,
+        line2: `${words[2]} ${words[3]}`,
+        subtitle: "burjolevelup",
+      }));
+    } else {
+      const splitIdx = Math.min(2, Math.floor(words.length / 2));
+      setTitleConfig((prev) => ({
+        ...prev,
+        enabled: true,
+        line1: words.slice(0, splitIdx).join(" "),
+        line2: words.slice(splitIdx, splitIdx + 2).join(" "),
+        subtitle: "burjolevelup",
+      }));
+    }
+  };
+
   // Render Export Video API
   // ─── Async export with job polling ──────────────────────────────────────────
   const startPollingJob = (jobId: string) => {
@@ -1448,6 +1550,11 @@ export default function CapCutWebStudio() {
         }));
         formData.append("overlayMetaJson", JSON.stringify(overlayMeta));
         overlayItems.forEach(o => formData.append("overlayFiles", o.file));
+      }
+
+      // Title & Opening Header Overlay (Reel Style)
+      if (titleConfig.enabled && (titleConfig.line1 || titleConfig.line2)) {
+        formData.append("titleConfigJson", JSON.stringify(titleConfig));
       }
 
       // Submit job — server returns jobId immediately
@@ -1644,6 +1751,7 @@ export default function CapCutWebStudio() {
     footages: previewFootages,
     transitions: previewTransitions,
     subtitles: previewSubtitles,
+    titleConfig: titleConfig.enabled ? titleConfig : undefined,
     voiceOverUrl: audioUrl || undefined,
     bgmUrl: bgmUrl || undefined,
     bgmVolume: bgmVolume,
@@ -1655,6 +1763,7 @@ export default function CapCutWebStudio() {
     previewFootages,
     previewTransitions,
     previewSubtitles,
+    titleConfig,
     audioUrl,
     bgmUrl,
     bgmVolume,
@@ -1761,12 +1870,12 @@ export default function CapCutWebStudio() {
 
       {viewMode === "wizard" ? (
         /* 1. LANDING PAGE: STUNNING VISUAL GENERATOR WIZARD VIEW */
-        <div className="flex-1 bg-[#09090b] overflow-y-auto p-4 md:p-8 flex flex-col items-center justify-center relative">
+        <div className="flex-1 bg-[#09090b] overflow-y-auto p-4 md:p-8 pb-24 flex flex-col items-center justify-start relative scroll-smooth">
           {/* BACKGROUND GLOW ACCENTS */}
           <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-96 h-96 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none" />
           <div className="absolute bottom-1/4 left-1/3 w-80 h-80 bg-purple-600/10 rounded-full blur-3xl pointer-events-none" />
 
-          <div className="max-w-4xl w-full space-y-6 bg-[#121215]/90 backdrop-blur-xl border border-[#27272a] rounded-3xl p-6 md:p-8 shadow-2xl relative z-10">
+          <div className="max-w-4xl w-full space-y-6 bg-[#121215]/90 backdrop-blur-xl border border-[#27272a] rounded-3xl p-6 md:p-8 shadow-2xl relative z-10 my-4">
             {/* HERO HEADER */}
             <div className="text-center space-y-2 pb-2 border-b border-[#27272a]/60">
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-gradient-to-r from-amber-500/10 via-indigo-500/10 to-purple-500/10 border border-indigo-500/20 text-indigo-300 text-xs font-extrabold">
@@ -1792,11 +1901,11 @@ export default function CapCutWebStudio() {
               </div>
 
               <textarea
-                rows={3}
+                rows={4}
                 placeholder="Ketik naskah video Anda di sini (contoh: Nikmati sensasi kuliner boba terlezat dengan promo spesial minggu ini...)..."
                 value={rawScript}
                 onChange={(e) => setRawScript(e.target.value)}
-                className="w-full text-xs p-3.5 rounded-2xl bg-[#09090b] border border-[#27272a] focus:border-indigo-500 text-slate-100 placeholder-slate-600 outline-none resize-none transition-all shadow-inner"
+                className="w-full text-xs p-3.5 rounded-2xl bg-[#09090b] border border-[#27272a] focus:border-indigo-500 text-slate-100 placeholder-slate-600 outline-none resize-y min-h-[90px] transition-all shadow-inner select-text"
               />
 
               {/* VISUAL VOICE SELECTION GRID (COMPACT VISUAL CARDS) */}
@@ -1869,11 +1978,208 @@ export default function CapCutWebStudio() {
               </div>
             </div>
 
-            {/* STEP 3: UPLOAD MEDIA FOOTAGES (AUTO-CUT CENTER PART) */}
+            {/* STEP 3: JUDUL OPENING VIDEO (REELS STYLE & ANIMASI IN/OUT ELEGAN) */}
+            <div className="space-y-3 pt-2">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-black text-amber-400 flex items-center gap-2 tracking-wider">
+                  <span className="w-5 h-5 rounded-full bg-amber-600/30 border border-amber-500/40 text-amber-300 flex items-center justify-center text-[10px]">3</span>
+                  JUDUL OPENING VIDEO (REELS STYLE)
+                </label>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleAutoGenerateTitle}
+                    className="text-[10px] font-bold text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 px-2.5 py-1 rounded-xl border border-amber-500/30 flex items-center gap-1.5 transition-all cursor-pointer"
+                  >
+                    <Sparkles className="w-3 h-3 text-amber-400" />
+                    Auto Judul dari Naskah
+                  </button>
+                  <button
+                    onClick={() => setTitleConfig((prev) => ({ ...prev, enabled: !prev.enabled }))}
+                    className={`text-[10px] font-bold px-2.5 py-1 rounded-xl border transition-all cursor-pointer ${titleConfig.enabled
+                        ? "bg-amber-500/20 border-amber-500/50 text-amber-300"
+                        : "bg-[#18181c] border-[#27272a] text-slate-400"
+                      }`}
+                  >
+                    {titleConfig.enabled ? "✓ Aktif" : "Nonaktif"}
+                  </button>
+                </div>
+              </div>
+
+              {titleConfig.enabled && (
+                <div className="p-3.5 rounded-2xl bg-[#09090b]/90 border border-amber-500/30 space-y-3 shadow-lg">
+                  {/* INPUTS ROW */}
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-300 mb-1 block">Baris 1 (Utama)</label>
+                      <input
+                        type="text"
+                        placeholder="Contoh: Renovasi"
+                        value={titleConfig.line1}
+                        onChange={(e) => setTitleConfig((prev) => ({ ...prev, line1: e.target.value }))}
+                        className="w-full text-xs font-black p-2.5 rounded-xl bg-[#18181c] border border-[#27272a] text-white focus:border-amber-500 outline-none"
+                      />
+                    </div>
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="text-[10px] font-bold text-slate-300">Baris 2 (Aksen)</label>
+                        <label className="flex items-center gap-1 text-[9px] text-amber-400 cursor-pointer font-bold">
+                          <input
+                            type="checkbox"
+                            checked={titleConfig.italicLine2 ?? true}
+                            onChange={(e) => setTitleConfig((prev) => ({ ...prev, italicLine2: e.target.checked }))}
+                            className="accent-amber-500 rounded"
+                          />
+                          Italic
+                        </label>
+                      </div>
+                      <input
+                        type="text"
+                        placeholder="Contoh: Coffee Bar"
+                        value={titleConfig.line2 || ""}
+                        onChange={(e) => setTitleConfig((prev) => ({ ...prev, line2: e.target.value }))}
+                        className={`w-full text-xs font-black p-2.5 rounded-xl bg-[#18181c] border border-[#27272a] text-white focus:border-amber-500 outline-none ${titleConfig.italicLine2 !== false ? "italic" : ""}`}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-bold text-slate-300 mb-1 block">Baris 3 (Badge/Handle)</label>
+                      <input
+                        type="text"
+                        placeholder="Contoh: burjolevelup"
+                        value={titleConfig.subtitle || ""}
+                        onChange={(e) => setTitleConfig((prev) => ({ ...prev, subtitle: e.target.value }))}
+                        className="w-full text-xs font-semibold p-2.5 rounded-xl bg-[#18181c] border border-[#27272a] text-slate-200 focus:border-amber-500 outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  {/* TIMING & DURATION CONTROLS */}
+                  <div className="p-2.5 rounded-xl bg-[#18181c] border border-[#27272a] space-y-2">
+                    <div className="flex justify-between items-center text-[10px] font-bold">
+                      <span className="text-slate-300 flex items-center gap-1.5">
+                        ⏱️ Durasi Muncul Judul:
+                        <span className="text-amber-400 font-mono font-black">{titleConfig.durationSec ?? 3.8} detik</span>
+                      </span>
+                      <span className="text-[9px] text-slate-500">Mulai dari {titleConfig.startSec ?? 0}s</span>
+                    </div>
+
+                    <input
+                      type="range"
+                      min="1.0"
+                      max="12.0"
+                      step="0.2"
+                      value={titleConfig.durationSec ?? 3.8}
+                      onChange={(e) => setTitleConfig((prev) => ({ ...prev, durationSec: parseFloat(e.target.value) }))}
+                      className="w-full accent-amber-500 cursor-pointer h-1.5 bg-[#27272a] rounded-lg"
+                    />
+
+                    {/* QUICK PRESET BUTTONS */}
+                    <div className="grid grid-cols-4 gap-1 pt-1">
+                      {[
+                        { label: "2.0s (Cepat)", sec: 2.0 },
+                        { label: "3.5s (Standar)", sec: 3.5 },
+                        { label: "5.0s (Panjang)", sec: 5.0 },
+                        { label: "Full Video", sec: totalVideoDurationSec > 0 ? totalVideoDurationSec : 15.0 },
+                      ].map((p) => (
+                        <button
+                          key={p.label}
+                          type="button"
+                          onClick={() => setTitleConfig((prev) => ({ ...prev, durationSec: p.sec }))}
+                          className={`py-1 rounded text-[9px] font-extrabold transition-all cursor-pointer ${
+                            (titleConfig.durationSec ?? 3.8) === p.sec
+                              ? "bg-amber-500 text-black shadow font-black"
+                              : "bg-[#09090b] text-slate-400 hover:text-slate-200 border border-[#27272a]"
+                          }`}
+                        >
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* ANIMATION PRESETS */}
+                  <div className="space-y-3 pt-1 border-t border-[#27272a]/60">
+                    {/* IN ANIMATION (8 OPTIONS) */}
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Animasi Masuk (8 Opsi Pilihan)</span>
+                        <span className="text-[9px] text-amber-400 font-bold">✨ Smooth Cinematic Springs</span>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                        {TITLE_IN_ANIMATIONS.map((a) => (
+                          <button
+                            key={a.id}
+                            type="button"
+                            onClick={() => setTitleConfig((prev) => ({ ...prev, animationIn: a.id as any }))}
+                            className={`p-2 rounded-xl text-left border transition-all cursor-pointer ${
+                              titleConfig.animationIn === a.id || (!titleConfig.animationIn && a.id === "spring-pop")
+                                ? "bg-amber-500/20 border-amber-500 text-amber-200 ring-1 ring-amber-500/40 shadow-sm"
+                                : "bg-[#18181c] border-[#27272a] text-slate-400 hover:border-slate-600 hover:text-slate-200"
+                            }`}
+                          >
+                            <div className="flex items-center gap-1 font-extrabold text-[10px] text-white">
+                              <span>{a.icon}</span>
+                              <span className="truncate">{a.label}</span>
+                            </div>
+                            <p className="text-[8px] text-slate-400 line-clamp-1 mt-0.5">{a.desc}</p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* OUT ANIMATION (6 OPTIONS) */}
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Animasi Keluar (6 Opsi Pilihan)</span>
+                        <span className="text-[9px] text-slate-500">Menghilang pada akhir durasi</span>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                        {TITLE_OUT_ANIMATIONS.map((a) => (
+                          <button
+                            key={a.id}
+                            type="button"
+                            onClick={() => setTitleConfig((prev) => ({ ...prev, animationOut: a.id as any }))}
+                            className={`p-2 rounded-xl text-left border transition-all cursor-pointer ${
+                              titleConfig.animationOut === a.id || (!titleConfig.animationOut && a.id === "blur-dissolve")
+                                ? "bg-amber-500/20 border-amber-500 text-amber-200 ring-1 ring-amber-500/40 shadow-sm"
+                                : "bg-[#18181c] border-[#27272a] text-slate-400 hover:border-slate-600 hover:text-slate-200"
+                            }`}
+                          >
+                            <div className="flex items-center gap-1 font-extrabold text-[10px] text-white">
+                              <span>{a.icon}</span>
+                              <span className="truncate">{a.label}</span>
+                            </div>
+                            <p className="text-[8px] text-slate-400 line-clamp-1 mt-0.5">{a.desc}</p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* LIVE MINI PREVIEW OF TITLE */}
+                  <div className="p-3 bg-[#121216] rounded-xl border border-[#27272a] flex flex-col items-center justify-center text-center">
+                    <p className="text-xl font-black text-white leading-tight tracking-tight drop-shadow-[0_2px_12px_rgba(0,0,0,0.9)]">
+                      {titleConfig.line1 || "Renovasi"}
+                    </p>
+                    {titleConfig.line2 && (
+                      <p className={`text-xl font-black text-white leading-tight drop-shadow-[0_2px_12px_rgba(0,0,0,0.9)] ${titleConfig.italicLine2 !== false ? "italic" : ""}`}>
+                        {titleConfig.line2}
+                      </p>
+                    )}
+                    {titleConfig.subtitle && (
+                      <p className="text-xs font-bold text-white/90 mt-1.5 tracking-wide drop-shadow-md">
+                        {titleConfig.subtitle}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* STEP 4: UPLOAD MEDIA FOOTAGES (AUTO-CUT CENTER PART) */}
             <div className="space-y-3 pt-2">
               <div className="flex items-center justify-between">
                 <label className="text-xs font-black text-emerald-400 flex items-center gap-2 tracking-wider">
-                  <span className="w-5 h-5 rounded-full bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 flex items-center justify-center text-[10px]">3</span>
+                  <span className="w-5 h-5 rounded-full bg-emerald-600/30 border border-emerald-500/40 text-emerald-300 flex items-center justify-center text-[10px]">4</span>
                   UPLOAD KLIP VIDEO / FOTO
                 </label>
                 <span className="text-[9px] font-extrabold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
@@ -1918,7 +2224,7 @@ export default function CapCutWebStudio() {
               )}
             </div>
 
-            {/* STEP 4: COVER AKHIRAN VIDEO TOGGLE CARD */}
+            {/* STEP 5: COVER AKHIRAN VIDEO TOGGLE CARD */}
             <div className="pt-2">
               <div
                 onClick={() => setIncludeEndingCover(!includeEndingCover)}
@@ -1932,16 +2238,18 @@ export default function CapCutWebStudio() {
                     type="checkbox"
                     checked={includeEndingCover}
                     onChange={(e) => setIncludeEndingCover(e.target.checked)}
-                    className="w-4 h-4 accent-amber-500 cursor-pointer"
+                    className="w-4 h-4 rounded accent-amber-500 cursor-pointer"
                   />
                   <div>
-                    <p className="font-extrabold text-xs text-slate-200 flex items-center gap-2">
-                      Sertakan Cover Akhiran Video
-                      <span className="text-[9px] text-amber-400 font-bold bg-amber-500/10 px-1.5 py-0.2 rounded border border-amber-500/30">
-                        + Transisi White Flash
+                    <p className="font-extrabold text-slate-100 text-xs flex items-center gap-1.5">
+                      Gunakan Cover Akhiran Video
+                      <span className="text-[9px] font-bold text-amber-400 bg-amber-500/10 px-1.5 py-0.2 rounded border border-amber-500/30">
+                        Otomatis
                       </span>
                     </p>
-                    <p className="text-[10px] text-slate-400 mt-0.5">Memasang gambar ending /akhiran di akhir timeline video</p>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      Menambahkan cover penutup default di bagian akhir video secara otomatis
+                    </p>
                   </div>
                 </div>
                 <div className="w-12 h-8 rounded-lg border border-amber-500/40 overflow-hidden bg-black flex-shrink-0 shadow">
@@ -2122,111 +2430,425 @@ export default function CapCutWebStudio() {
                   </div>
                 )}
 
-                {/* TAB: TEXT OVERLAY */}
+                {/* TAB: TEXT OVERLAY & JUDUL OPENING */}
                 {activeNavTab === "text" && (
                   <div className="space-y-3">
-                    <span className="text-xs font-bold text-slate-300">Text Overlay & Judul</span>
-                    <textarea
-                      rows={3}
-                      placeholder="Ketikkan naskah atau overlay video di sini..."
-                      value={customTextOverlay}
-                      onChange={(e) => setCustomTextOverlay(e.target.value)}
-                      className="w-full text-xs p-2.5 rounded-xl bg-[#09090b] border border-[#27272a] text-slate-100 resize-none"
-                    />
-                    <div className="space-y-1.5">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Gaya Text Subtitle (5 Opsi)</span>
-                      <div className="grid grid-cols-2 gap-1.5">
-                        {[
-                          { id: "plain-shadow", label: "Clean Shadow" },
-                          { id: "yellow-highlight", label: "Yellow Highlight" },
-                          { id: "bold-outline", label: "Bold Outline" },
-                          { id: "neon-glow", label: "Cyber Neon" },
-                          { id: "minimalist", label: "Minimalist Box" },
-                        ].map((s) => (
-                          <button
-                            key={s.id}
-                            onClick={() => setSubtitleStyle(s.id)}
-                            className={`p-2 rounded-xl text-[10px] font-bold border transition-all cursor-pointer ${subtitleStyle === s.id
-                                ? "border-purple-500 bg-purple-950/60 text-purple-200 ring-1 ring-purple-500/40"
-                                : "border-[#27272a] bg-[#09090b] text-slate-400 hover:border-slate-600"
-                              }`}
-                          >
-                            {s.label}
-                          </button>
-                        ))}
-                      </div>
+                    {/* SEGMENTED TAB SWITCHER */}
+                    <div className="grid grid-cols-2 gap-1 p-1 bg-[#09090b] rounded-xl border border-[#27272a]">
+                      <button
+                        onClick={() => setTextTabSection("title")}
+                        className={`py-1.5 px-2 rounded-lg text-[10px] font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer ${textTabSection === "title"
+                            ? "bg-amber-500 text-black shadow-md shadow-amber-500/20"
+                            : "text-slate-400 hover:text-slate-200"
+                          }`}
+                      >
+                        <Sparkles className="w-3 h-3" />
+                        Judul Opening (Reels)
+                      </button>
+                      <button
+                        onClick={() => setTextTabSection("subtitle")}
+                        className={`py-1.5 px-2 rounded-lg text-[10px] font-black transition-all flex items-center justify-center gap-1.5 cursor-pointer ${textTabSection === "subtitle"
+                            ? "bg-purple-600 text-white shadow-md shadow-purple-600/20"
+                            : "text-slate-400 hover:text-slate-200"
+                          }`}
+                      >
+                        <Subtitles className="w-3 h-3" />
+                        Auto Subtitle
+                      </button>
                     </div>
 
-                    {/* SUBTITLE FONT SIZE CONTROLS */}
-                    <div className="p-2.5 rounded-xl bg-[#09090b] border border-[#27272a] space-y-2">
-                      <div className="flex justify-between items-center text-[10px] font-bold">
-                        <span className="text-slate-300">Ukuran Teks Subtitle</span>
-                        <span className="text-purple-400 font-mono font-black">{subtitleFontSize}px</span>
+                    {/* ════════════════ SECTION 1: JUDUL OPENING (REELS STYLE) ════════════════ */}
+                    {textTabSection === "title" && (
+                      <div className="space-y-3">
+                        {/* TOGGLE & QUICK ACTIONS HEADER */}
+                        <div className="p-2.5 rounded-xl bg-[#09090b] border border-amber-500/30 flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              id="toggleTitleCheck"
+                              checked={titleConfig.enabled}
+                              onChange={(e) => setTitleConfig((prev) => ({ ...prev, enabled: e.target.checked }))}
+                              className="w-4 h-4 rounded accent-amber-500 cursor-pointer"
+                            />
+                            <label htmlFor="toggleTitleCheck" className="text-xs font-black text-amber-300 cursor-pointer">
+                              Aktifkan Judul Video
+                            </label>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              onClick={handleAutoGenerateTitle}
+                              className="text-[9px] font-bold text-amber-400 bg-amber-500/10 hover:bg-amber-500/20 px-2 py-1 rounded-lg border border-amber-500/30 flex items-center gap-1 transition-all cursor-pointer"
+                            >
+                              <Sparkles className="w-3 h-3" />
+                              Auto Naskah
+                            </button>
+                            <button
+                              onClick={() => setSeekToSec(titleConfig.startSec ?? 0)}
+                              className="text-[9px] font-bold text-slate-200 bg-[#18181c] hover:bg-slate-700 px-2 py-1 rounded-lg border border-[#27272a] flex items-center gap-1 transition-all cursor-pointer"
+                            >
+                              <Play className="w-2.5 h-2.5 text-amber-400" />
+                              Preview
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* TEXT INPUTS HIERARCHY */}
+                        <div className="space-y-2 p-2.5 rounded-xl bg-[#09090b] border border-[#27272a]">
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-300 mb-1 block">Baris 1 (Judul Utama)</label>
+                            <input
+                              type="text"
+                              placeholder="Contoh: Renovasi"
+                              value={titleConfig.line1}
+                              onChange={(e) => setTitleConfig((prev) => ({ ...prev, line1: e.target.value }))}
+                              className="w-full text-xs font-black p-2 rounded-lg bg-[#18181c] border border-[#27272a] text-white focus:border-amber-500 outline-none"
+                            />
+                          </div>
+
+                          <div>
+                            <div className="flex justify-between items-center mb-1">
+                              <label className="text-[10px] font-bold text-slate-300">Baris 2 (Aksen / Sub-Judul)</label>
+                              <label className="flex items-center gap-1 text-[9px] text-amber-400 cursor-pointer font-bold">
+                                <input
+                                  type="checkbox"
+                                  checked={titleConfig.italicLine2 ?? true}
+                                  onChange={(e) => setTitleConfig((prev) => ({ ...prev, italicLine2: e.target.checked }))}
+                                  className="accent-amber-500 rounded"
+                                />
+                                Miring (Italic)
+                              </label>
+                            </div>
+                            <input
+                              type="text"
+                              placeholder="Contoh: Coffee Bar"
+                              value={titleConfig.line2 || ""}
+                              onChange={(e) => setTitleConfig((prev) => ({ ...prev, line2: e.target.value }))}
+                              className={`w-full text-xs font-black p-2 rounded-lg bg-[#18181c] border border-[#27272a] text-white focus:border-amber-500 outline-none ${titleConfig.italicLine2 !== false ? "italic" : ""}`}
+                            />
+                          </div>
+
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-300 mb-1 block">Baris 3 (Badge / Akun / Tag)</label>
+                            <input
+                              type="text"
+                              placeholder="Contoh: burjolevelup atau @username"
+                              value={titleConfig.subtitle || ""}
+                              onChange={(e) => setTitleConfig((prev) => ({ ...prev, subtitle: e.target.value }))}
+                              className="w-full text-xs font-semibold p-2 rounded-lg bg-[#18181c] border border-[#27272a] text-slate-200 focus:border-amber-500 outline-none"
+                            />
+                          </div>
+                        </div>
+
+                        {/* GAYA DESAIN PRESET */}
+                        <div className="space-y-1.5">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Preset Desain Judul</span>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            {[
+                              { id: "reel-aesthetic", label: "Reel Aesthetic (Foto)" },
+                              { id: "bold-impact", label: "Bold Impact" },
+                              { id: "chic-luxury", label: "Chic Luxury Serif" },
+                              { id: "pill-badge", label: "Pill Tag Badge" },
+                            ].map((st) => (
+                              <button
+                                key={st.id}
+                                onClick={() => setTitleConfig((prev) => ({ ...prev, style: st.id as any }))}
+                                className={`p-2 rounded-xl text-[10px] font-bold border transition-all cursor-pointer text-left ${titleConfig.style === st.id
+                                    ? "border-amber-500 bg-amber-950/60 text-amber-200 ring-1 ring-amber-500/40"
+                                    : "border-[#27272a] bg-[#09090b] text-slate-400 hover:border-slate-600"
+                                  }`}
+                              >
+                                {st.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* TIMING & DURATION CONTROLS */}
+                        <div className="p-2.5 rounded-xl bg-[#09090b] border border-[#27272a] space-y-2">
+                          <div className="flex justify-between items-center text-[10px] font-bold">
+                            <span className="text-slate-300 flex items-center gap-1">
+                              ⏱️ Durasi Tampil Judul
+                            </span>
+                            <span className="text-amber-400 font-mono font-black">{titleConfig.durationSec ?? 3.8} detik</span>
+                          </div>
+
+                          <input
+                            type="range"
+                            min="1.0"
+                            max="12.0"
+                            step="0.2"
+                            value={titleConfig.durationSec ?? 3.8}
+                            onChange={(e) => setTitleConfig((prev) => ({ ...prev, durationSec: parseFloat(e.target.value) }))}
+                            className="w-full accent-amber-500 cursor-pointer h-1.5 bg-[#27272a] rounded-lg"
+                          />
+
+                          {/* QUICK PRESET BUTTONS */}
+                          <div className="grid grid-cols-4 gap-1 pt-1">
+                            {[
+                              { label: "2.0s (Cepat)", sec: 2.0 },
+                              { label: "3.5s (Standar)", sec: 3.5 },
+                              { label: "5.0s (Panjang)", sec: 5.0 },
+                              { label: "Full Video", sec: totalVideoDurationSec > 0 ? totalVideoDurationSec : 15.0 },
+                            ].map((p) => (
+                              <button
+                                key={p.label}
+                                type="button"
+                                onClick={() => setTitleConfig((prev) => ({ ...prev, durationSec: p.sec }))}
+                                className={`py-1 rounded text-[9px] font-extrabold transition-all cursor-pointer ${
+                                  (titleConfig.durationSec ?? 3.8) === p.sec
+                                    ? "bg-amber-500 text-black shadow font-black"
+                                    : "bg-[#18181c] text-slate-400 hover:text-slate-200 border border-[#27272a]"
+                                }`}
+                              >
+                                {p.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* IN ANIMATION SELECTION (8 OPTIONS) */}
+                        <div className="space-y-1.5">
+                          <div className="flex justify-between items-center">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Animasi Masuk (In - 8 Opsi)</span>
+                            <span className="text-[9px] text-amber-400">Klik untuk Preview</span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            {TITLE_IN_ANIMATIONS.map((a) => (
+                              <button
+                                key={a.id}
+                                type="button"
+                                onClick={() => {
+                                  setTitleConfig((prev) => ({ ...prev, animationIn: a.id as any }));
+                                  setSeekToSec(titleConfig.startSec ?? 0);
+                                }}
+                                className={`p-2 rounded-xl text-left border transition-all cursor-pointer ${
+                                  titleConfig.animationIn === a.id || (!titleConfig.animationIn && a.id === "spring-pop")
+                                    ? "bg-amber-500/20 border-amber-500 text-amber-200 ring-1 ring-amber-500/30"
+                                    : "bg-[#09090b] border-[#27272a] text-slate-400 hover:border-slate-600"
+                                }`}
+                              >
+                                <div className="flex items-center gap-1 font-bold text-[10px] text-slate-200">
+                                  <span>{a.icon}</span>
+                                  <span className="truncate">{a.label}</span>
+                                </div>
+                                <p className="text-[8px] text-slate-500 line-clamp-1 mt-0.5">{a.desc}</p>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* OUT ANIMATION SELECTION (6 OPTIONS) */}
+                        <div className="space-y-1.5">
+                          <div className="flex justify-between items-center">
+                            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Animasi Keluar (Out - 6 Opsi)</span>
+                            <span className="text-[9px] text-slate-500">Klik untuk Preview</span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            {TITLE_OUT_ANIMATIONS.map((a) => (
+                              <button
+                                key={a.id}
+                                type="button"
+                                onClick={() => {
+                                  setTitleConfig((prev) => ({ ...prev, animationOut: a.id as any }));
+                                  const exitSec = Math.max(0, (titleConfig.startSec ?? 0) + (titleConfig.durationSec ?? 3.8) - 0.4);
+                                  setSeekToSec(exitSec);
+                                }}
+                                className={`p-2 rounded-xl text-left border transition-all cursor-pointer ${
+                                  titleConfig.animationOut === a.id || (!titleConfig.animationOut && a.id === "blur-dissolve")
+                                    ? "bg-amber-500/20 border-amber-500 text-amber-200 ring-1 ring-amber-500/30"
+                                    : "bg-[#09090b] border-[#27272a] text-slate-400 hover:border-slate-600"
+                                }`}
+                              >
+                                <div className="flex items-center gap-1 font-bold text-[10px] text-slate-200">
+                                  <span>{a.icon}</span>
+                                  <span className="truncate">{a.label}</span>
+                                </div>
+                                <p className="text-[8px] text-slate-500 line-clamp-1 mt-0.5">{a.desc}</p>
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* PRECISE SLIDERS FOR TIMING & POSITION */}
+                        <div className="p-2.5 rounded-xl bg-[#09090b] border border-[#27272a] space-y-3">
+                          {/* DURATION SLIDER */}
+                          <div className="space-y-1">
+                            <div className="flex justify-between items-center text-[10px] font-bold">
+                              <span className="text-slate-300">Durasi Tampil Judul</span>
+                              <span className="text-amber-400 font-mono font-black">{titleConfig.durationSec ?? 3.8}s</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="1.5"
+                              max="8.0"
+                              step="0.2"
+                              value={titleConfig.durationSec ?? 3.8}
+                              onChange={(e) => setTitleConfig((prev) => ({ ...prev, durationSec: parseFloat(e.target.value) }))}
+                              className="w-full accent-amber-500 cursor-pointer h-1.5 bg-[#27272a] rounded-lg"
+                            />
+                          </div>
+
+                          {/* START TIME SLIDER */}
+                          <div className="space-y-1">
+                            <div className="flex justify-between items-center text-[10px] font-bold">
+                              <span className="text-slate-300">Waktu Mulai (Start Time)</span>
+                              <span className="text-amber-400 font-mono font-black">{titleConfig.startSec ?? 0}s</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="0"
+                              max="6.0"
+                              step="0.2"
+                              value={titleConfig.startSec ?? 0}
+                              onChange={(e) => setTitleConfig((prev) => ({ ...prev, startSec: parseFloat(e.target.value) }))}
+                              className="w-full accent-amber-500 cursor-pointer h-1.5 bg-[#27272a] rounded-lg"
+                            />
+                          </div>
+
+                          {/* FONT SIZE SLIDER */}
+                          <div className="space-y-1">
+                            <div className="flex justify-between items-center text-[10px] font-bold">
+                              <span className="text-slate-300">Ukuran Font Judul</span>
+                              <span className="text-amber-400 font-mono font-black">{titleConfig.fontSize ?? 84}px</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="50"
+                              max="130"
+                              step="2"
+                              value={titleConfig.fontSize ?? 84}
+                              onChange={(e) => setTitleConfig((prev) => ({ ...prev, fontSize: parseInt(e.target.value) }))}
+                              className="w-full accent-amber-500 cursor-pointer h-1.5 bg-[#27272a] rounded-lg"
+                            />
+                          </div>
+
+                          {/* VERTICAL POSITION Y SLIDER */}
+                          <div className="space-y-1">
+                            <div className="flex justify-between items-center text-[10px] font-bold">
+                              <span className="text-slate-300">Posisi Vertikal Y (Atas/Tengah/Bawah)</span>
+                              <span className="text-amber-400 font-mono font-black">{titleConfig.positionY ?? 40}%</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="15"
+                              max="85"
+                              step="1"
+                              value={titleConfig.positionY ?? 40}
+                              onChange={(e) => setTitleConfig((prev) => ({ ...prev, positionY: parseInt(e.target.value) }))}
+                              className="w-full accent-amber-500 cursor-pointer h-1.5 bg-[#27272a] rounded-lg"
+                            />
+                          </div>
+                        </div>
                       </div>
-                      <input
-                        type="range"
-                        min="28"
-                        max="96"
-                        step="4"
-                        value={subtitleFontSize}
-                        onChange={(e) => setSubtitleFontSize(parseInt(e.target.value))}
-                        className="w-full accent-purple-500 cursor-pointer h-1.5 bg-[#27272a] rounded-lg"
-                      />
-                      <div className="grid grid-cols-4 gap-1 pt-1">
-                        {[
-                          { label: "Sedang", size: 44 },
-                          { label: "Normal", size: 56 },
-                          { label: "Besar", size: 72 },
-                          { label: "Jumbo", size: 88 },
-                        ].map((sz) => (
-                          <button
-                            key={sz.size}
-                            onClick={() => setSubtitleFontSize(sz.size)}
-                            className={`py-1 rounded text-[9px] font-extrabold transition-all cursor-pointer ${subtitleFontSize === sz.size
-                                ? "bg-purple-600 text-white shadow"
-                                : "bg-[#18181c] text-slate-400 hover:text-slate-200 border border-[#27272a]"
-                              }`}
-                          >
-                            {sz.label}
-                          </button>
-                        ))}
+                    )}
+
+                    {/* ════════════════ SECTION 2: AUTO SUBTITLE ════════════════ */}
+                    {textTabSection === "subtitle" && (
+                      <div className="space-y-3">
+                        <textarea
+                          rows={3}
+                          placeholder="Ketikkan naskah atau overlay video di sini..."
+                          value={customTextOverlay}
+                          onChange={(e) => setCustomTextOverlay(e.target.value)}
+                          className="w-full text-xs p-2.5 rounded-xl bg-[#09090b] border border-[#27272a] text-slate-100 resize-y select-text focus:border-purple-500 outline-none"
+                        />
+                        <div className="space-y-1.5">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Gaya Text Subtitle (5 Opsi)</span>
+                          <div className="grid grid-cols-2 gap-1.5">
+                            {[
+                              { id: "plain-shadow", label: "Clean Shadow" },
+                              { id: "yellow-highlight", label: "Yellow Highlight" },
+                              { id: "bold-outline", label: "Bold Outline" },
+                              { id: "neon-glow", label: "Cyber Neon" },
+                              { id: "minimalist", label: "Minimalist Box" },
+                            ].map((s) => (
+                              <button
+                                key={s.id}
+                                onClick={() => setSubtitleStyle(s.id)}
+                                className={`p-2 rounded-xl text-[10px] font-bold border transition-all cursor-pointer ${subtitleStyle === s.id
+                                    ? "border-purple-500 bg-purple-950/60 text-purple-200 ring-1 ring-purple-500/40"
+                                    : "border-[#27272a] bg-[#09090b] text-slate-400 hover:border-slate-600"
+                                  }`}
+                              >
+                                {s.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* SUBTITLE FONT SIZE CONTROLS */}
+                        <div className="p-2.5 rounded-xl bg-[#09090b] border border-[#27272a] space-y-2">
+                          <div className="flex justify-between items-center text-[10px] font-bold">
+                            <span className="text-slate-300">Ukuran Teks Subtitle</span>
+                            <span className="text-purple-400 font-mono font-black">{subtitleFontSize}px</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="28"
+                            max="96"
+                            step="4"
+                            value={subtitleFontSize}
+                            onChange={(e) => setSubtitleFontSize(parseInt(e.target.value))}
+                            className="w-full accent-purple-500 cursor-pointer h-1.5 bg-[#27272a] rounded-lg"
+                          />
+                          <div className="grid grid-cols-4 gap-1 pt-1">
+                            {[
+                              { label: "Sedang", size: 44 },
+                              { label: "Normal", size: 56 },
+                              { label: "Besar", size: 72 },
+                              { label: "Jumbo", size: 88 },
+                            ].map((sz) => (
+                              <button
+                                key={sz.size}
+                                onClick={() => setSubtitleFontSize(sz.size)}
+                                className={`py-1 rounded text-[9px] font-extrabold transition-all cursor-pointer ${subtitleFontSize === sz.size
+                                    ? "bg-purple-600 text-white shadow"
+                                    : "bg-[#18181c] text-slate-400 hover:text-slate-200 border border-[#27272a]"
+                                  }`}
+                              >
+                                {sz.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* SUBTITLE POSITION Y CONTROLS */}
+                        <div className="p-2.5 rounded-xl bg-[#09090b] border border-[#27272a] space-y-2">
+                          <div className="flex justify-between items-center text-[10px] font-bold">
+                            <span className="text-slate-300">Posisi Vertikal Subtitle (Atas/Bawah)</span>
+                            <span className="text-indigo-400 font-mono font-black">{subtitleBottomPos}px</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="100"
+                            max="500"
+                            step="10"
+                            value={subtitleBottomPos}
+                            onChange={(e) => setSubtitleBottomPos(parseInt(e.target.value))}
+                            className="w-full accent-indigo-500 cursor-pointer h-1.5 bg-[#27272a] rounded-lg"
+                          />
+                          <div className="grid grid-cols-4 gap-1 pt-1">
+                            {[
+                              { label: "Bawah", pos: 140 },
+                              { label: "Ideal", pos: 220 },
+                              { label: "Tengah", pos: 340 },
+                              { label: "Atas", pos: 460 },
+                            ].map((p) => (
+                              <button
+                                key={p.pos}
+                                onClick={() => setSubtitleBottomPos(p.pos)}
+                                className={`py-1 rounded text-[9px] font-extrabold transition-all cursor-pointer ${subtitleBottomPos === p.pos
+                                    ? "bg-indigo-600 text-white shadow"
+                                    : "bg-[#18181c] text-slate-400 hover:text-slate-200 border border-[#27272a]"
+                                  }`}
+                              >
+                                {p.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                    {/* SUBTITLE POSITION Y CONTROLS */}
-                    <div className="p-2.5 rounded-xl bg-[#09090b] border border-[#27272a] space-y-2">
-                      <div className="flex justify-between items-center text-[10px] font-bold">
-                        <span className="text-slate-300">Posisi Vertikal Subtitle (Atas/Bawah)</span>
-                        <span className="text-indigo-400 font-mono font-black">{subtitleBottomPos}px</span>
-                      </div>
-                      <input
-                        type="range"
-                        min="100"
-                        max="500"
-                        step="10"
-                        value={subtitleBottomPos}
-                        onChange={(e) => setSubtitleBottomPos(parseInt(e.target.value))}
-                        className="w-full accent-indigo-500 cursor-pointer h-1.5 bg-[#27272a] rounded-lg"
-                      />
-                      <div className="grid grid-cols-4 gap-1 pt-1">
-                        {[
-                          { label: "Bawah", pos: 140 },
-                          { label: "Ideal", pos: 220 },
-                          { label: "Tengah", pos: 340 },
-                          { label: "Atas", pos: 460 },
-                        ].map((p) => (
-                          <button
-                            key={p.pos}
-                            onClick={() => setSubtitleBottomPos(p.pos)}
-                            className={`py-1 rounded text-[9px] font-extrabold transition-all cursor-pointer ${subtitleBottomPos === p.pos
-                                ? "bg-indigo-600 text-white shadow"
-                                : "bg-[#18181c] text-slate-400 hover:text-slate-200 border border-[#27272a]"
-                              }`}
-                          >
-                            {p.label}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
+                    )}
                   </div>
                 )}
 
@@ -2240,11 +2862,11 @@ export default function CapCutWebStudio() {
                       </button>
                     </div>
                     <textarea
-                      rows={3}
+                      rows={4}
                       placeholder="Masukkan naskah video Anda di sini..."
                       value={rawScript}
                       onChange={(e) => setRawScript(e.target.value)}
-                      className="w-full text-xs p-2.5 rounded-xl bg-[#09090b] border border-[#27272a] text-slate-100 resize-none"
+                      className="w-full text-xs p-2.5 rounded-xl bg-[#09090b] border border-[#27272a] text-slate-100 resize-y select-text focus:border-indigo-500 outline-none min-h-[80px]"
                     />
 
                     {/* 6 VOICE SELECTION CARDS */}
@@ -3171,9 +3793,76 @@ export default function CapCutWebStudio() {
                 </div>
               </div>
 
-              {/* LAYER 4: T1 CAPTIONS SUBTITLES TRACK (TIMED CHUNK PILLS) */}
+              {/* LAYER 4: T0 JUDUL OPENING / VIDEO TITLE TRACK */}
               <div className="flex items-center gap-3">
-                <span className="w-20 text-[10px] font-extrabold text-purple-400">Layer 4 (T1)</span>
+                <span className="w-20 text-[10px] font-extrabold text-amber-400">Layer 4 (T0)</span>
+                <div className="flex-1 relative h-10">
+                  {titleConfig.enabled && (titleConfig.line1 || titleConfig.line2) ? (
+                    <div
+                      onClick={() => {
+                        setSelectedTimelineItem({ type: "title" });
+                        setActiveNavTab("text");
+                        setTextTabSection("title");
+                        setSeekToSec(titleConfig.startSec ?? 0);
+                      }}
+                      className={`w-full h-10 relative overflow-hidden rounded-xl border transition-all cursor-pointer ${
+                        selectedTimelineItem?.type === "title"
+                          ? "border-amber-400 bg-amber-950/40 ring-2 ring-amber-500/80 shadow-lg"
+                          : "border-transparent bg-[#09090b]/30 hover:border-amber-500/30"
+                      }`}
+                    >
+                      {(() => {
+                        const start = titleConfig.startSec ?? 0;
+                        const dur = titleConfig.durationSec ?? 3.8;
+                        const leftPct = (start / Math.max(0.1, totalVideoDurationSec)) * 100;
+                        const widthPct = Math.min(100 - leftPct, Math.max(8, (dur / Math.max(0.1, totalVideoDurationSec)) * 100));
+
+                        return (
+                          <div
+                            style={{ left: `${leftPct}%`, width: `calc(${widthPct}% - 4px)` }}
+                            className="absolute top-1 bottom-1 px-3 bg-gradient-to-r from-amber-950/90 via-amber-900/90 to-amber-950/90 border border-amber-500/60 text-amber-200 rounded-lg text-[9px] font-black flex items-center justify-between truncate shadow-lg"
+                          >
+                            <div className="flex items-center gap-1.5 truncate">
+                              <Sparkles className="w-3 h-3 text-amber-400 flex-shrink-0 animate-pulse" />
+                              <span className="truncate">
+                                {titleConfig.line1} {titleConfig.line2 ? `• ${titleConfig.line2}` : ""} ({dur.toFixed(1)}s)
+                              </span>
+                            </div>
+                            <span className="text-[8px] text-amber-300 font-mono flex-shrink-0 bg-amber-500/20 px-1.5 py-0.5 rounded border border-amber-500/30">
+                              {titleConfig.animationIn || "spring-pop"}
+                            </span>
+                          </div>
+                        );
+                      })()}
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setTitleConfig((prev) => ({ ...prev, enabled: false }));
+                          setSelectedTimelineItem(null);
+                        }}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-rose-400 hover:text-rose-200 text-[10px] font-bold z-20"
+                        title="Nonaktifkan Judul"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div
+                      onClick={() => {
+                        setActiveNavTab("text");
+                        setTextTabSection("title");
+                      }}
+                      className="w-full h-10 bg-[#09090b]/50 rounded-xl border border-dashed border-[#27272a] hover:border-amber-500/40 flex items-center px-4 text-slate-600 hover:text-amber-400/70 italic text-[10px] cursor-pointer transition-colors"
+                    >
+                      (T0 Judul Opening Nonaktif - Klik untuk aktifkan di Tab Text)
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* LAYER 5: T1 CAPTIONS SUBTITLES TRACK (TIMED CHUNK PILLS) */}
+              <div className="flex items-center gap-3">
+                <span className="w-20 text-[10px] font-extrabold text-purple-400">Layer 5 (T1)</span>
                 <div className="flex-1 relative h-10">
                   {previewSubtitles.length > 0 ? (
                     <div

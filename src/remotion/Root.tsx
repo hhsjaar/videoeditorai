@@ -11,6 +11,21 @@ export const RemotionRoot: React.FC = () => {
     clipDuration: 3,
     bgmVolume: 0.2,
     subtitleStyle: "plain-shadow",
+    titleConfig: {
+      enabled: false,
+      line1: "Renovasi",
+      line2: "Coffee Bar",
+      subtitle: "burjolevelup",
+      style: "reel-aesthetic",
+      italicLine2: true,
+      fontSize: 84,
+      fontColor: "#FFFFFF",
+      positionY: 42,
+      startSec: 0,
+      durationSec: 3.8,
+      animationIn: "spring-pop",
+      animationOut: "blur-dissolve",
+    },
   };
 
   return (

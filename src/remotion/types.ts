@@ -30,11 +30,42 @@ export interface OverlayItem {
   y?: number;           // custom y% (0-100), used when position=custom
 }
 
+export interface TitleOverlayConfig {
+  enabled: boolean;
+  line1: string;          // e.g. "Renovasi"
+  line2?: string;         // e.g. "Coffee Bar"
+  subtitle?: string;      // e.g. "burjolevelup"
+  style?: "reel-aesthetic" | "bold-impact" | "chic-luxury" | "neon-glow" | "pill-badge";
+  italicLine2?: boolean;  // default true
+  fontSize?: number;      // base size (default 80 for 1080p base)
+  fontColor?: string;     // default #FFFFFF
+  positionY?: number;     // vertical percentage from top (default 42%)
+  startSec?: number;      // default 0.0
+  durationSec?: number;   // default 3.8
+  animationIn?:
+    | "spring-pop"
+    | "kinetic-zoom"
+    | "slide-up"
+    | "stagger-cascade"
+    | "mask-reveal"
+    | "neon-flash"
+    | "flip-drop"
+    | "blur-fade";
+  animationOut?:
+    | "blur-dissolve"
+    | "slide-up-out"
+    | "slide-down-out"
+    | "scale-fade"
+    | "zoom-explode"
+    | "flip-out";
+}
+
 export interface MainCompositionProps {
   footages: FootageItem[];
   transitions: TransitionItem[];
   subtitles: SubtitleChunk[];
   overlays?: OverlayItem[];
+  titleConfig?: TitleOverlayConfig;
   voiceOverUrl?: string;
   bgmUrl?: string;
   bgmVolume?: number;
@@ -43,3 +74,4 @@ export interface MainCompositionProps {
   subtitleBottomPos?: number;
   clipDuration?: number;
 }
+
