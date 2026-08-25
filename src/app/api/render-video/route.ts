@@ -98,7 +98,7 @@ export async function POST(req: NextRequest) {
     let subtitleChunksList: Array<{ text: string; start: number; end: number }> = [];
     try { subtitleChunksList = JSON.parse((formData.get("subtitlesJson") as string) || "[]"); } catch { }
 
-    let footagesMetaList: Array<{ duration: number; startFromSec: number; colorGrade: string; isImage?: boolean }> = [];
+    let footagesMetaList: Array<{ duration: number; startFromSec: number; colorGrade: string; isImage?: boolean; keepOriginalAudio?: boolean }> = [];
     try { footagesMetaList = JSON.parse((formData.get("footagesMetaJson") as string) || "[]"); } catch { }
 
     let titleConfig: any = undefined;
@@ -184,6 +184,7 @@ export async function POST(req: NextRequest) {
         startFromSec: startSec,
         colorGrade: meta.colorGrade || editingStyle,
         isImage: isImg,
+        keepOriginalAudio: meta.keepOriginalAudio,
       };
     });
 

@@ -73,7 +73,7 @@ export const VideoTracks: React.FC<VideoTracksProps> = ({ footages, defaultClipD
                 <OffthreadVideo
                   src={resolvedUrl}
                   {...(startFromFrame ? { startFrom: startFromFrame } : {})}
-                  volume={0}
+                  volume={clip.keepOriginalAudio ? 1 : 0}
                   style={{
                     width: "100%",
                     height: "100%",

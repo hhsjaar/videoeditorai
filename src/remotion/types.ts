@@ -4,6 +4,7 @@ export interface FootageItem {
   startFromSec?: number; // start offset in seconds for center-cut trimming
   colorGrade?: string;
   isImage?: boolean;
+  keepOriginalAudio?: boolean; // true = don't mute the clip's own audio track (e.g. AI-generated clips with baked-in voice)
 }
 
 export interface TransitionItem {

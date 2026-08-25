@@ -63,6 +63,7 @@ interface UploadedFootage {
   duration: number;
   startFromSec?: number;
   isImage?: boolean;
+  keepOriginalAudio?: boolean;
 }
 
 const AVAILABLE_TRANSITIONS = [
@@ -1548,7 +1549,7 @@ export default function CapCutWebStudio() {
 
       // Pass exact preview subtitles & footage metadata from studio workspace
       formData.append("subtitlesJson", JSON.stringify(previewSubtitles));
-      formData.append("footagesMetaJson", JSON.stringify(previewFootages.map((f) => ({ duration: f.duration, startFromSec: f.startFromSec || 0, colorGrade: f.colorGrade, isImage: f.isImage }))));
+      formData.append("footagesMetaJson", JSON.stringify(previewFootages.map((f) => ({ duration: f.duration, startFromSec: f.startFromSec || 0, colorGrade: f.colorGrade, isImage: f.isImage, keepOriginalAudio: f.keepOriginalAudio }))));
 
       const startFromSecList = previewFootages.map((f) => f.startFromSec || 0);
       formData.append("startFromSecList", JSON.stringify(startFromSecList));
@@ -1616,6 +1617,7 @@ export default function CapCutWebStudio() {
         startFromSec: f.startFromSec || 0,
         colorGrade: editingStyle,
         isImage: isImg,
+        keepOriginalAudio: f.keepOriginalAudio,
       };
     });
   }, [footages, customClipDurations, clipDuration, editingStyle]);
@@ -1811,10 +1813,14 @@ export default function CapCutWebStudio() {
     if (!projectData) return;
     if (projectData.fullScript) setRawScript(projectData.fullScript);
     if (projectData.voice) setSelectedVoice(projectData.voice);
-    if (projectData.bgmId) {
-      const track = PRESET_VIRAL_BGM_TRACKS.find((t) => t.id === projectData.bgmId);
-      if (track) setBgmUrl(track.url);
-    }
+
+    // Hand off into a bare timeline — no default title, no auto captions, no BGM.
+    // The AI-generated clips carry their own baked-in voice/dialogue, so nothing
+    // should be pre-populated on top of them.
+    setTitleConfig((prev) => ({ ...prev, enabled: false }));
+    setAutoCaptionGenerated(false);
+    setBgmUrl(null);
+    setBgmFile(null);
 
     if (projectData.scenes && Array.isArray(projectData.scenes)) {
       const results = await Promise.all(
@@ -1835,6 +1841,8 @@ export default function CapCutWebStudio() {
               duration: sc.duration || 5,
               startFromSec: 0,
               isImage: !hasRealVideo,
+              // Veo-generated clips carry their own voice/dialogue audio — keep it audible.
+              keepOriginalAudio: hasRealVideo,
             };
           } catch (err) {
             console.error(`Failed to fetch scene ${idx + 1} for Klip AI:`, err);
