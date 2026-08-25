@@ -22,7 +22,7 @@ export const RemotionRoot: React.FC = () => {
       fontColor: "#FFFFFF",
       positionY: 42,
       startSec: 0,
-      durationSec: 3.8,
+      durationSec: 5,
       animationIn: "spring-pop",
       animationOut: "blur-dissolve",
     },

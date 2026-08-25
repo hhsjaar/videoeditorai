@@ -41,6 +41,11 @@ export const RemotionPlayerWrapper: React.FC<PlayerProps> = ({
     if (seekToSec !== undefined && seekToSec !== null && lastSeekRef.current !== seekToSec && playerRef.current) {
       lastSeekRef.current = seekToSec;
       const targetFrame = Math.round(seekToSec * 60);
+      // Manual seek (clicking the timeline) always stops playback at the new position,
+      // instead of Remotion Player's default of continuing to play from there.
+      if (playerRef.current.isPlaying()) {
+        playerRef.current.pause();
+      }
       playerRef.current.seekTo(targetFrame);
     }
   }, [seekToSec]);

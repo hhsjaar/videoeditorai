@@ -153,13 +153,22 @@ export async function POST(req: NextRequest) {
       await writeFile(path.join(tempDir, savedBgmFilename), Buffer.from(await bgmFile.arrayBuffer()));
     } else if (bgmUrl && bgmUrl.trim()) {
       try {
-        const { readFile } = await import("fs/promises");
-        const cleanPath = bgmUrl.startsWith("/") ? bgmUrl.slice(1) : bgmUrl;
-        const bgmBuffer = await readFile(path.join(process.cwd(), "public", cleanPath));
-        savedBgmFilename = "bgm.mp3";
-        await writeFile(path.join(tempDir, savedBgmFilename), bgmBuffer);
+        if (/^https?:\/\//i.test(bgmUrl)) {
+          // External BGM (e.g. a Freesound.org preview URL) — download it into tempDir.
+          const res = await fetch(bgmUrl);
+          if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
+          const bgmBuffer = Buffer.from(await res.arrayBuffer());
+          savedBgmFilename = "bgm.mp3";
+          await writeFile(path.join(tempDir, savedBgmFilename), bgmBuffer);
+        } else {
+          const { readFile } = await import("fs/promises");
+          const cleanPath = bgmUrl.startsWith("/") ? bgmUrl.slice(1) : bgmUrl;
+          const bgmBuffer = await readFile(path.join(process.cwd(), "public", cleanPath));
+          savedBgmFilename = "bgm.mp3";
+          await writeFile(path.join(tempDir, savedBgmFilename), bgmBuffer);
+        }
       } catch (err) {
-        console.error("Could not read preset BGM file:", err);
+        console.error("Could not fetch/read BGM:", err);
       }
     }
 
@@ -303,6 +312,7 @@ export async function POST(req: NextRequest) {
     }
 
     // 7b. Enqueue job — returns immediately, render happens in background
+    const derivedTitle = [titleConfig?.line1, titleConfig?.line2].filter(Boolean).join(" ").trim() || undefined;
     enqueueJob(jobId, {
       tempDir,
       footageItems,
@@ -319,6 +329,7 @@ export async function POST(req: NextRequest) {
       defaultTrimSec,
       exportPreset,
       aspectRatio,
+      title: derivedTitle,
     });
 
     console.log(`[render-video] Job enqueued: ${jobId}`);

@@ -11,7 +11,7 @@ export async function GET(
     return NextResponse.json({ error: "Missing jobId" }, { status: 400 });
   }
 
-  const job = getJob(jobId);
+  const job = await getJob(jobId);
   if (!job) {
     return NextResponse.json({ error: "Job not found" }, { status: 404 });
   }
@@ -28,6 +28,7 @@ export async function GET(
     totalFrames: job.totalFrames,
     elapsedSec: elapsed,
     error: job.error,
+    allocatedChunks: job.allocatedChunks, // how many parallel Lambda chunks this job got (multi-user budget sharing)
     downloadUrl: job.status === "done" ? `/api/render-download/${jobId}` : null,
   });
 }

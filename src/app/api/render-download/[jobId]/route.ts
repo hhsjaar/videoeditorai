@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createReadStream, statSync } from "fs";
-import { getJob } from "@/lib/renderQueue";
-import { rm } from "fs/promises";
-import { Readable } from "stream";
+import { getJob, getFreshDownloadUrl } from "@/lib/renderQueue";
 
 export async function GET(
   _req: NextRequest,
@@ -14,43 +11,25 @@ export async function GET(
     return NextResponse.json({ error: "Missing jobId" }, { status: 400 });
   }
 
-  const job = getJob(jobId);
+  const job = await getJob(jobId);
   if (!job) {
     return NextResponse.json({ error: "Job not found" }, { status: 404 });
   }
 
-  if (job.status !== "done" || !job.outputPath) {
+  if (job.status !== "done") {
     return NextResponse.json(
       { error: `Job is not ready (status: ${job.status})` },
       { status: 409 }
     );
   }
 
-  let fileSize: number;
-  try {
-    fileSize = statSync(job.outputPath).size;
-  } catch {
-    return NextResponse.json({ error: "Output file not found on server" }, { status: 404 });
+  // Output lives on S3 (Remotion Lambda render). Always regenerate a fresh presigned
+  // URL — the cached one may have expired for jobs revisited from render history.
+  const url = await getFreshDownloadUrl(jobId);
+  if (!url) {
+    return NextResponse.json({ error: "Output tidak ditemukan di S3." }, { status: 404 });
   }
 
-  const filename = `AutoVideo_${jobId.slice(-8)}_${Date.now()}.mp4`;
-  const fileStream = createReadStream(job.outputPath);
-
-  // Convert Node.js Readable to Web ReadableStream
-  const webStream = Readable.toWeb(fileStream) as ReadableStream;
-
-  // Schedule file cleanup after stream starts (non-blocking)
-  // Give 60s buffer in case client downloads slowly
-  setTimeout(() => {
-    rm(job.outputPath!, { force: true }).catch(() => {});
-  }, 60 * 1000);
-
-  return new NextResponse(webStream, {
-    headers: {
-      "Content-Type": "video/mp4",
-      "Content-Disposition": `attachment; filename="${filename}"`,
-      "Content-Length": fileSize.toString(),
-      "Cache-Control": "no-store",
-    },
-  });
+  // The filename/Content-Disposition is already set via downloadBehavior at render time.
+  return NextResponse.redirect(url, { status: 302 });
 }

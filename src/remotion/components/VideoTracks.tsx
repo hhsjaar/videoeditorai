@@ -2,6 +2,7 @@ import React from "react";
 import { Sequence, OffthreadVideo, Img } from "remotion";
 import { FootageItem } from "../types";
 import { resolveMediaSrc } from "../utils";
+import { getColorGradePreset } from "../colorGrades";
 
 interface VideoTracksProps {
   footages: FootageItem[];
@@ -31,33 +32,8 @@ export const VideoTracks: React.FC<VideoTracksProps> = ({ footages, defaultClipD
         const durationSec = clip.duration || defaultClipDuration || 3;
         const { startFrame, durationFrames } = frameBoundaries[index];
 
-        // 10 Curated Color Filter Presets
-        let filterStyle = "none";
-        if (clip.colorGrade === "clean-commercial") {
-          filterStyle = "brightness(1.05) contrast(1.04) saturate(1.05)";
-        } else if (clip.colorGrade === "warm-commercial") {
-          filterStyle = "sepia(0.12) saturate(1.08) contrast(1.02) hue-rotate(-5deg)";
-        } else if (clip.colorGrade === "modern-cinematic") {
-          filterStyle = "contrast(1.15) saturate(0.95) hue-rotate(5deg)";
-        } else if (clip.colorGrade === "soft-teal") {
-          filterStyle = "contrast(1.05) saturate(1.02) hue-rotate(15deg) sepia(0.08)";
-        } else if (clip.colorGrade === "muted-luxury") {
-          filterStyle = "saturate(0.8) contrast(1.1) brightness(0.98)";
-        } else if (clip.colorGrade === "warm-clean") {
-          filterStyle = "sepia(0.08) brightness(1.03) contrast(1.02)";
-        } else if (clip.colorGrade === "cinematic-neutral") {
-          filterStyle = "contrast(1.1) saturate(0.92) brightness(0.99)";
-        } else if (clip.colorGrade === "pastel-commercial") {
-          filterStyle = "brightness(1.06) saturate(0.85) contrast(0.95)";
-        } else if (clip.colorGrade === "urban-clean") {
-          filterStyle = "contrast(1.12) hue-rotate(-8deg) saturate(1.02)";
-        } else if (clip.colorGrade === "editorial-commercial") {
-          filterStyle = "contrast(1.08) brightness(1.04) saturate(1.1)";
-        } else if (clip.colorGrade === "fast-viral") {
-          filterStyle = "contrast(1.22) saturate(1.45) brightness(1.04)";
-        } else if (clip.colorGrade === "cinematic-aesthetic") {
-          filterStyle = "contrast(1.28) saturate(1.12) hue-rotate(-12deg) brightness(0.95)";
-        }
+        const gradePreset = getColorGradePreset(clip.colorGrade);
+        const filterStyle = gradePreset?.filter ?? "none";
 
         const resolvedUrl = resolveMediaSrc(clip.url) || clip.url;
         // Detect images by explicit isImage flag OR file extension / data URL
@@ -106,6 +82,32 @@ export const VideoTracks: React.FC<VideoTracksProps> = ({ footages, defaultClipD
                 />
               )}
             </div>
+
+            {/* Split-tone tint overlay (composited via blend mode, sits above the filtered media) */}
+            {gradePreset?.overlay && (
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  background: gradePreset.overlay.background,
+                  mixBlendMode: gradePreset.overlay.blendMode,
+                  opacity: gradePreset.overlay.opacity,
+                  pointerEvents: "none",
+                }}
+              />
+            )}
+
+            {/* Vignette for depth/focus */}
+            {gradePreset?.vignetteStrength ? (
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  background: `radial-gradient(ellipse at 50% 50%, rgba(0,0,0,0) 45%, rgba(0,0,0,${gradePreset.vignetteStrength}) 100%)`,
+                  pointerEvents: "none",
+                }}
+              />
+            ) : null}
           </Sequence>
         );
       })}

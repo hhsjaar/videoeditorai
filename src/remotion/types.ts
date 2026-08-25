@@ -37,11 +37,14 @@ export interface TitleOverlayConfig {
   subtitle?: string;      // e.g. "burjolevelup"
   style?: "reel-aesthetic" | "bold-impact" | "chic-luxury" | "neon-glow" | "pill-badge";
   italicLine2?: boolean;  // default true
+  fontFamily?: string;    // font registry id, see src/remotion/fonts.ts (default "inter")
   fontSize?: number;      // base size (default 80 for 1080p base)
   fontColor?: string;     // default #FFFFFF
-  positionY?: number;     // vertical percentage from top (default 42%)
+  positionX?: number;     // horizontal percentage from left, center-anchored (default 50%)
+  positionY?: number;     // vertical percentage from top, center-anchored (default 42%)
+  scale?: number;         // user-set size multiplier via drag-resize handle (default 1.0)
   startSec?: number;      // default 0.0
-  durationSec?: number;   // default 3.8
+  durationSec?: number;   // default 5
   animationIn?:
     | "spring-pop"
     | "kinetic-zoom"

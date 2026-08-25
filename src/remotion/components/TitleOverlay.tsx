@@ -1,6 +1,7 @@
 import React from "react";
 import { useCurrentFrame, useVideoConfig, spring, interpolate } from "remotion";
 import { TitleOverlayConfig } from "../types";
+import { resolveTitleFontFamily } from "../fonts";
 
 interface TitleOverlayProps {
   titleConfig?: TitleOverlayConfig;
@@ -16,7 +17,7 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({ titleConfig, fps }) 
   }
 
   const startSec = titleConfig.startSec ?? 0;
-  const durationSec = titleConfig.durationSec ?? 3.8;
+  const durationSec = titleConfig.durationSec ?? 5;
   const startFrame = Math.round(startSec * fps);
   const endFrame = Math.round((startSec + durationSec) * fps);
 
@@ -31,7 +32,9 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({ titleConfig, fps }) 
   // Responsive scale base relative to 1080p
   const scaleFactor = width / 1080;
   const baseFontSize = (titleConfig.fontSize || 84) * scaleFactor;
+  const positionXPercent = titleConfig.positionX ?? 50;
   const positionYPercent = titleConfig.positionY ?? 40;
+  const userScale = titleConfig.scale ?? 1;
 
   // Animation durations
   const inDurationFrames = Math.min(Math.round(0.75 * fps), Math.floor(totalFrames / 2));
@@ -208,11 +211,17 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({ titleConfig, fps }) 
   // ── TYPOGRAPHY STYLING ─────────────────────────────────────────────────────
   const isStaggerMode = animIn === "stagger-cascade" && localFrame < inDurationFrames;
 
+  // titleConfig.fontFamily (a registry id, see src/remotion/fonts.ts) takes priority.
+  // Falls back to the legacy "chic-luxury style = Playfair Display" behavior for titles
+  // saved before font selection existed.
+  const resolvedFontFamily = titleConfig.fontFamily
+    ? resolveTitleFontFamily(titleConfig.fontFamily)
+    : titleConfig.style === "chic-luxury"
+      ? resolveTitleFontFamily("playfair-display")
+      : resolveTitleFontFamily("inter");
+
   const line1Style: React.CSSProperties = {
-    fontFamily:
-      titleConfig.style === "chic-luxury"
-        ? "'Playfair Display', Georgia, serif"
-        : "Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+    fontFamily: resolvedFontFamily,
     fontWeight: 900,
     fontSize: `${baseFontSize}px`,
     lineHeight: 1.05,
@@ -230,10 +239,7 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({ titleConfig, fps }) 
 
   const isItalic = titleConfig.italicLine2 ?? true;
   const line2Style: React.CSSProperties = {
-    fontFamily:
-      titleConfig.style === "chic-luxury"
-        ? "'Playfair Display', Georgia, serif"
-        : "Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
+    fontFamily: resolvedFontFamily,
     fontWeight: isItalic ? 800 : 700,
     fontStyle: isItalic ? "italic" : "normal",
     fontSize: `${baseFontSize * 1.02}px`,
@@ -276,24 +282,32 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({ titleConfig, fps }) 
       style={{
         position: "absolute",
         top: `${positionYPercent}%`,
-        left: "5%",
-        right: "5%",
-        transform: `translateY(-50%) ${containerTransform}`,
-        opacity: containerOpacity,
-        filter: containerFilter,
-        clipPath: containerClipPath,
-        WebkitClipPath: containerClipPath,
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        textAlign: "center",
+        left: `${positionXPercent}%`,
+        maxWidth: "90%",
+        // Center-anchor at (positionX%, positionY%), then apply the user's manual
+        // drag-resize scale — kept as its own transform layer so it never fights
+        // with the in/out animation transform below.
+        transform: `translate(-50%, -50%) scale(${userScale})`,
         zIndex: 45,
-        pointerEvents: "none",
-        userSelect: "none",
-        willChange: "transform, opacity, filter, clip-path",
       }}
     >
+      <div
+        style={{
+          transform: containerTransform,
+          opacity: containerOpacity,
+          filter: containerFilter,
+          clipPath: containerClipPath,
+          WebkitClipPath: containerClipPath,
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          textAlign: "center",
+          pointerEvents: "none",
+          userSelect: "none",
+          willChange: "transform, opacity, filter, clip-path",
+        }}
+      >
       {/* LINE 1 */}
       {titleConfig.line1 && <div style={line1Style}>{titleConfig.line1}</div>}
 
@@ -321,6 +335,7 @@ export const TitleOverlay: React.FC<TitleOverlayProps> = ({ titleConfig, fps }) 
           {titleConfig.subtitle}
         </div>
       )}
+      </div>
     </div>
   );
 };
