@@ -6,8 +6,12 @@ const SCENE_SCHEMA = {
   properties: {
     sceneNumber: { type: "integer" },
     duration: { type: "integer", enum: [4, 6, 8], description: "Durasi scene dalam detik — HARUS salah satu dari 4, 6, atau 8 (batasan AI video engine)" },
-    visualPrompt: { type: "string", description: "Prompt visual Bahasa Inggris yang sangat deskriptif untuk AI video engine — HARUS menyebutkan characterDescription persis sama jika scene menampilkan karakter utama" },
-    voiceoverText: { type: "string", description: "Teks voice over Bahasa Indonesia natural, komunikatif, pas dengan durasi" },
+    visualPrompt: {
+      type: "string",
+      description:
+        "Prompt video Bahasa Inggris, ditulis MENGALIR dalam satu paragraf (bukan daftar/bullet), mengikuti urutan: [subject + detailed description] + [specific action] + [location & time] + [camera movement] + [lighting & mood] + [visual style] + [audio: dialogue/ambience/sound effects]. Deskriptif seperti menceritakan apa yang terlihat, bukan perintah.",
+    },
+    voiceoverText: { type: "string", description: "Teks voice over Bahasa Indonesia natural, komunikatif, pas dengan durasi — SAMA PERSIS dengan narasi baris storyboard yang jadi sumbernya" },
     cameraMotion: { type: "string", enum: ["zoom-in", "zoom-out", "pan-left", "pan-right", "slow-tilt", "dolly-forward"] },
     transition: { type: "string", enum: ["light-leak", "zoom-blur", "flash-white", "fade-black", "film-burn", "passerby"] },
     overlayTitle: { type: "string", description: "Teks judul/kata kunci singkat penarik perhatian, atau string kosong jika tidak perlu" },
@@ -18,72 +22,68 @@ const SCENE_SCHEMA = {
 const RESPONSE_SCHEMA = {
   type: "object",
   properties: {
-    videoTitle: { type: "string" },
-    summary: { type: "string" },
-    concept30s: {
-      type: "object",
-      description: "Breakdown konsep video 30 detik sebelum masuk ke storyboard per-scene",
-      properties: {
-        problemHook: { type: "string", description: "Masalah yang dirasain penonton di 3 detik pertama" },
-        turningPoint: { type: "string", description: "Titik balik ceritanya" },
-        takeawayFeeling: { type: "string", description: "Perasaan yang harus dibawa pulang penonton" },
-      },
-      required: ["problemHook", "turningPoint", "takeawayFeeling"],
-    },
-    characterDescription: {
-      type: "string",
-      description: "Deskripsi karakter utama (umur, pakaian, rambut, ciri khas) yang HARUS dipakai identik di setiap scene yang menampilkan karakter — string kosong jika video ini faceless/tanpa karakter tetap.",
-    },
-    scenes: { type: "array", minItems: 4, maxItems: 6, items: SCENE_SCHEMA },
+    scenes: { type: "array", items: SCENE_SCHEMA },
   },
-  required: ["videoTitle", "summary", "concept30s", "characterDescription", "scenes"],
+  required: ["scenes"],
 };
+
+function clampToVeoDuration(requested: number): 4 | 6 | 8 {
+  const options = [4, 6, 8];
+  return options.reduce((closest, v) => (Math.abs(v - requested) < Math.abs(closest - requested) ? v : closest), 8) as 4 | 6 | 8;
+}
 
 export async function POST(req: NextRequest) {
   try {
     const {
-      concept,
-      userPrompt,
-      customInstructions,
+      storyboard,
       aspectRatio = "9:16",
-      stylePreset = "cinematic",
       voice = "Zephyr",
       bgmId = "bsl1",
-      targetDuration = 30,
       apiKey,
     } = await req.json();
 
     const activeApiKey = apiKey || process.env.GEMINI_API_KEY;
     if (!activeApiKey) {
-      return NextResponse.json(
-        { error: "API Key Google Gemini belum dikonfigurasi." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "API Key Google Gemini belum dikonfigurasi." }, { status: 400 });
+    }
+    if (!storyboard || !Array.isArray(storyboard.rows) || storyboard.rows.length === 0) {
+      return NextResponse.json({ error: "Storyboard tidak ditemukan." }, { status: 400 });
     }
 
     const ai = new GoogleGenAI({ apiKey: activeApiKey });
+    const profile = storyboard.consistencyProfile || {};
+    const hasCharacter = !!(profile.character && profile.character.trim());
 
-    const systemPrompt = `Anda adalah Lead Director & AI Video Cinematographer.
-Tugas Anda adalah merombak dan mematangkan Konsep Video terpilih menjadi naskah breakdown scene-by-scene yang sangat terstruktur, visual-rich, dan siap digenerate oleh AI Video Engine.
+    const rowsText = storyboard.rows
+      .map(
+        (r: any, i: number) =>
+          `Baris ${i + 1} (id ${r.id}, durasi ${Math.max(1, r.endSec - r.startSec)} detik):\n- Visual (ID): ${r.visual}\n- Narasi (ID): ${r.narration}\n- Emosi: ${r.emotion}`
+      )
+      .join("\n\n");
 
-Detail Input:
-- Ide Awal: "${userPrompt || ""}"
-- Konsep Terpilih: ${JSON.stringify(concept || {}, null, 2)}
-- Catatan Tambahan dari User: "${customInstructions || "Optimalkan untuk engagement maksimal"}"
-- Aspek Rasio: ${aspectRatio}
-- Style Visual Preset: ${stylePreset}
-- Suara Voice Over: ${voice}
-- BGM Track: ${bgmId}
-- Target Total Durasi: ${targetDuration} detik (buat antara 4 sampai 6 adegan/scene, total durasi mendekati target)
+    const systemPrompt = `Anda adalah sutradara + penulis prompt AI video engine kelas dunia. Ubah setiap baris storyboard di bawah ini jadi satu prompt video Bahasa Inggris, satu scene per baris storyboard (jangan digabung, jangan dipecah lagi).
 
-Aturan Penting:
-1. Sebelum masuk ke scene, isi dulu "concept30s": masalah yang dirasain penonton di 3 detik pertama, titik balik ceritanya di mana, dan perasaan apa yang harus dibawa pulang penonton di akhir.
-2. Buat antara 4 sampai 6 scenes. Setiap scene HARUS bisa berdiri sendiri secara visual.
-3. Kalau konsep video ini menampilkan karakter utama (bukan video faceless/b-roll murni), tentukan SATU "characterDescription" (umur, pakaian, rambut, ciri khas) di awal. Setiap "visualPrompt" scene yang menampilkan karakter itu WAJIB merujuk deskripsi yang SAMA PERSIS — supaya karakternya konsisten dari scene ke scene, bukan berubah-ubah. Kalau videonya faceless, kosongkan characterDescription dan jangan sebut karakter di visualPrompt manapun.
-4. "duration" tiap scene HARUS salah satu dari 4, 6, atau 8 detik saja (batasan teknis AI video engine) — jangan nilai lain.
-5. "visualPrompt": Bahasa Inggris, sangat deskriptif, fotorealistik/sinematik (sebutkan subjek+deskripsi detail, aksi spesifik, lokasi & waktu, pergerakan kamera, pencahayaan & mood, gaya visual, 8k resolution, photorealistic cinematic film).
-6. "voiceoverText": Bahasa Indonesia yang natural, komunikatif, bukan bahasa iklan kaku, pas dengan durasi.
-7. Seluruh naskah voiceover jika digabungkan harus mengalir enak didengar dan memiliki hook, isi yang padat, dan call-to-action di akhir.`;
+PROFIL KONSISTENSI (WAJIB dipakai identik di SETIAP scene yang relevan — ini kunci supaya semua klip terasa satu video utuh saat dirangkai):
+- Karakter utama: ${hasCharacter ? profile.character : "(tidak ada — video ini faceless/b-roll, jangan sebut karakter manusia tetap)"}
+- Gaya visual: ${profile.visualStyle || "cinematic, photorealistic"}
+- Environment/lokasi: ${profile.environment || "(ikuti konteks tiap baris)"}
+- Pencahayaan & mood: ${profile.lighting || "(ikuti konteks tiap baris)"}
+- Bahasa kamera: ${profile.cameraLanguage || "(bebas, sesuai aksi tiap baris)"}
+- Aspek rasio output: ${aspectRatio}
+
+Storyboard (sumber, Bahasa Indonesia):
+${rowsText}
+
+Aturan WAJIB untuk tiap "visualPrompt":
+1. Bahasa Inggris, ditulis MENGALIR dalam satu paragraf utuh (bukan bullet/list), dengan urutan: [subjek + deskripsi detail] + [aksi spesifik] + [lokasi & waktu] + [pergerakan kamera] + [pencahayaan & mood] + [gaya visual] + [audio: dialog/ambience/sound effect].
+2. Deskriptif, seolah menceritakan apa yang terlihat — bukan kalimat perintah ("show", "generate", dsb dilarang).
+3. ${hasCharacter ? "WAJIB buka paragraf dengan deskripsi karakter di atas KATA-PER-KATA sama (boleh diterjemahkan ke Inggris tapi detail & urutannya harus identik) di SETIAP scene yang menampilkan karakter — jangan sampai deskripsi berubah antar scene." : "Video ini faceless — jangan munculkan karakter manusia tetap yang sama, fokus ke objek/environment/b-roll."}
+4. Gaya visual (visualStyle di atas) HARUS disebut dengan istilah yang sama/konsisten di SETIAP scene (lensa, grain, color grade, dsb) supaya terasa satu video.
+5. Sertakan audio: dialog (kalau ada, kutip voiceoverText baris itu dalam Bahasa Indonesia di dalam narasi audio), ambience lokasi, dan sound effect yang relevan.
+6. Jangan pakai nama orang asli/tokoh terkenal.
+7. "voiceoverText" HARUS sama persis dengan narasi baris storyboard sumbernya (jangan diubah).
+8. "duration" harus salah satu dari 4, 6, atau 8 detik — pilih yang paling dekat dengan durasi baris storyboard sumbernya.
+9. Urutan "scenes" HARUS sama dengan urutan baris storyboard di atas, sceneNumber mulai dari 1.`;
 
     const candidateModels = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-flash-latest"];
     let responseText = "";
@@ -95,6 +95,7 @@ Aturan Penting:
           model: mName,
           contents: systemPrompt,
           config: {
+            temperature: 0.5,
             responseMimeType: "application/json",
             responseJsonSchema: RESPONSE_SCHEMA,
           },
@@ -108,27 +109,33 @@ Aturan Penting:
       }
     }
 
-    if (!responseText) {
-      throw lastErr || new Error("Gagal mengolah breakdown scene Gemini.");
-    }
+    if (!responseText) throw lastErr || new Error("Gagal mengolah breakdown scene Gemini.");
 
     const parsedData = JSON.parse(responseText);
+    const scenes = (parsedData.scenes || []).map((sc: any, i: number) => ({
+      ...sc,
+      sceneNumber: i + 1,
+      duration: clampToVeoDuration(sc.duration || 6),
+    }));
+
     return NextResponse.json({
       success: true,
       refinedData: {
-        ...parsedData,
+        videoTitle: storyboard.videoTitle,
+        summary: storyboard.concept30s?.takeawayFeeling || "",
+        concept30s: storyboard.concept30s,
+        characterDescription: profile.character || "",
+        consistencyProfile: profile,
         aspectRatio,
-        stylePreset,
+        stylePreset: profile.visualStyle || "cinematic",
         voice,
         bgmId,
-        totalDuration: targetDuration,
+        totalDuration: storyboard.rows.reduce((acc: number, r: any) => acc + Math.max(1, r.endSec - r.startSec), 0),
+        scenes,
       },
     });
   } catch (error: any) {
     console.error("Error refining video scenes:", error);
-    return NextResponse.json(
-      { error: error.message || "Gagal menyusun naskah adegan video." },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: error.message || "Gagal menyusun naskah adegan video." }, { status: 500 });
   }
 }

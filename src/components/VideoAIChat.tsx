@@ -29,6 +29,31 @@ interface Scene {
   videoUrl?: string | null;
 }
 
+interface ConsistencyProfile {
+  character: string;
+  visualStyle: string;
+  environment: string;
+  lighting: string;
+  cameraLanguage: string;
+}
+
+interface StoryboardRow {
+  id: string;
+  clipGroup: number;
+  startSec: number;
+  endSec: number;
+  visual: string;
+  narration: string;
+  emotion: string;
+}
+
+interface StoryboardIndoData {
+  videoTitle: string;
+  concept30s: { problemHook: string; turningPoint: string; takeawayFeeling: string };
+  consistencyProfile: ConsistencyProfile;
+  rows: StoryboardRow[];
+}
+
 interface RefinedData {
   videoTitle: string;
   summary: string;
@@ -40,26 +65,27 @@ interface RefinedData {
   scenes: Scene[];
 }
 
-type QAKey = "character" | "visualStyle" | "narrationStyle";
+interface QAStep {
+  key: string;
+  question: string;
+  options: string[];
+}
+
+const CUSTOM_OPTION = "Lainnya, aku tulis sendiri";
 
 interface ChatMsg {
   id: string;
   sender: "ai" | "user";
-  kind: "text" | "loading" | "keywords-concepts" | "quick-replies" | "storyboard" | "scenes-generate";
+  kind: "text" | "loading" | "keywords-concepts" | "quick-replies" | "storyboard-id" | "storyboard" | "scenes-generate";
   text?: string;
   keywords?: string[];
   concepts?: Concept[];
-  qaKey?: QAKey;
+  qaKey?: string;
   qaOptions?: string[];
   answered?: boolean;
+  storyboardIndo?: StoryboardIndoData;
   refinedData?: RefinedData;
 }
-
-const QA_STEPS: Array<{ key: QAKey; question: string; options: string[] }> = [
-  { key: "character", question: "Karakter utamanya siapa?", options: ["Cowok 20-an", "Cewek 20-an", "On-cam (host sendiri)", "Bebas, kamu pilihin"] },
-  { key: "visualStyle", question: "Gaya visualnya mau ke mana?", options: ["Live action / shot beneran", "AI-generated cinematic", "Faceless b-roll + VO", "Animasi / ilustrasi"] },
-  { key: "narrationStyle", question: "Narasinya disampaikan gimana?", options: ["VO narator (off-cam)", "Karakter ngomong ke kamera", "Campuran VO + dialog"] },
-];
 
 let idCounter = 0;
 const nextId = () => `m${++idCounter}_${Date.now()}`;
@@ -79,9 +105,11 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
     },
   ]);
   const [input, setInput] = useState("");
-  const [phase, setPhase] = useState<"brief" | "concepts" | "qa" | "storyboard" | "done">("brief");
+  const [phase, setPhase] = useState<"brief" | "concepts" | "qa" | "qa-custom" | "storyboard" | "done">("brief");
+  const [qaSteps, setQaSteps] = useState<QAStep[]>([]);
   const [qaIndex, setQaIndex] = useState(0);
-  const [qaAnswers, setQaAnswers] = useState<Record<QAKey, string>>({ character: "", visualStyle: "", narrationStyle: "" });
+  const [qaAnswers, setQaAnswers] = useState<Record<string, string>>({});
+  const [pendingCustomKey, setPendingCustomKey] = useState<string | null>(null);
   const [selectedConcept, setSelectedConcept] = useState<Concept | null>(null);
   const [briefText, setBriefText] = useState("");
   const [quality, setQuality] = useState<VeoQuality>("lite");
@@ -146,76 +174,122 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
     }
   }
 
-  // ─── Step 2: pick concept → start Q&A ────────────────────────────────────
-  function handlePickConcept(concept: Concept) {
+  // ─── Step 2: pick concept → fetch contextual Q&A ─────────────────────────
+  async function handlePickConcept(concept: Concept) {
     if (phase !== "concepts") return;
     setSelectedConcept(concept);
     pushMsg({ sender: "user", kind: "text", text: `Aku pilih: "${concept.title}"` });
-    setPhase("qa");
-    setQaIndex(0);
-    askQA(0);
+
+    const loadingId = pushLoading("Menyiapkan pertanyaan yang relevan buat konsep ini...");
+    try {
+      const data = await callApi("/api/video-ai/qa-questions", { brief: briefText, concept, apiKey });
+      removeMsg(loadingId);
+      const steps: QAStep[] = data.questions && data.questions.length > 0
+        ? data.questions
+        : [{ key: "arahan_tambahan", question: "Ada arahan tambahan yang mau kamu tentuin sebelum lanjut?", options: ["Bebas, kamu pilihin"] }];
+      setQaSteps(steps);
+      setQaAnswers({});
+      setPhase("qa");
+      setQaIndex(0);
+      askQA(steps, 0);
+    } catch (err: any) {
+      removeMsg(loadingId);
+      pushMsg({ sender: "ai", kind: "text", text: `Maaf, gagal nyiapin pertanyaan: ${err.message}` });
+      setPhase("concepts");
+    }
   }
 
-  function askQA(index: number) {
-    const step = QA_STEPS[index];
+  function askQA(steps: QAStep[], index: number) {
+    const step = steps[index];
     pushMsg({ sender: "ai", kind: "quick-replies", qaKey: step.key, qaOptions: step.options, text: step.question });
   }
 
-  function handleQAAnswer(msgId: string, key: QAKey, value: string) {
-    setQaAnswers((prev) => ({ ...prev, [key]: value }));
+  function advanceQA(index: number) {
+    const nextIndex = index + 1;
+    if (nextIndex < qaSteps.length) {
+      setQaIndex(nextIndex);
+      askQA(qaSteps, nextIndex);
+    } else {
+      buildStoryboardIndo(qaAnswers);
+    }
+  }
+
+  function handleQAAnswer(msgId: string, key: string, value: string) {
+    if (value === CUSTOM_OPTION) {
+      updateMsg(msgId, { answered: true });
+      setPendingCustomKey(key);
+      setPhase("qa-custom");
+      return;
+    }
+    const nextAnswers = { ...qaAnswers, [key]: value };
+    setQaAnswers(nextAnswers);
     updateMsg(msgId, { answered: true });
     pushMsg({ sender: "user", kind: "text", text: value });
-
-    const nextIndex = qaIndex + 1;
-    if (nextIndex < QA_STEPS.length) {
-      setQaIndex(nextIndex);
-      askQA(nextIndex);
-    } else {
-      buildStoryboard({ ...qaAnswers, [key]: value });
-    }
+    advanceQA(qaIndex);
   }
 
-  function handleQASkip(msgId: string, key: QAKey) {
+  function handleQASkip(msgId: string, key: string) {
     updateMsg(msgId, { answered: true });
     pushMsg({ sender: "user", kind: "text", text: "(Skip)" });
-    const nextIndex = qaIndex + 1;
-    if (nextIndex < QA_STEPS.length) {
-      setQaIndex(nextIndex);
-      askQA(nextIndex);
-    } else {
-      buildStoryboard(qaAnswers);
-    }
+    advanceQA(qaIndex);
   }
 
-  // ─── Step 3: build storyboard + final English prompts ───────────────────
-  async function buildStoryboard(answers: Record<QAKey, string>) {
+  function handleCustomQASubmit() {
+    const text = input.trim();
+    if (!text || !pendingCustomKey) return;
+    setInput("");
+    setQaAnswers((prev) => ({ ...prev, [pendingCustomKey]: text }));
+    pushMsg({ sender: "user", kind: "text", text });
+    setPendingCustomKey(null);
+    setPhase("qa");
+    advanceQA(qaIndex);
+  }
+
+  // ─── Step 3: build Indonesian storyboard table (review checkpoint) ──────
+  async function buildStoryboardIndo(answers: Record<string, string>) {
     if (!selectedConcept) return;
     setPhase("storyboard");
-    const loadingId = pushLoading("Oke, aku susun konsep 30 detik, storyboard, dan prompt video final-nya ya...");
+    const loadingId = pushLoading("Aku susun konsep & storyboard-nya dulu ya, biar bisa kamu cek sebelum jadi prompt final...");
     try {
-      const customInstructions = [
-        answers.character && `Karakter utama: ${answers.character}`,
-        answers.narrationStyle && `Cara narasi disampaikan: ${answers.narrationStyle}`,
-      ].filter(Boolean).join(". ");
-
-      const data = await callApi("/api/video-ai/refine-scenes", {
+      const data = await callApi("/api/video-ai/storyboard", {
         concept: selectedConcept,
         userPrompt: briefText,
-        customInstructions,
-        aspectRatio: "9:16",
-        stylePreset: answers.visualStyle || "cinematic",
-        voice: selectedConcept.recommendedVoice || "Zephyr",
-        bgmId: selectedConcept.recommendedBgm || "bsl1",
+        qaAnswers: answers,
         targetDuration: 30,
         apiKey,
       });
       removeMsg(loadingId);
-      pushMsg({ sender: "ai", kind: "storyboard", refinedData: data.refinedData, text: "Nih hasilnya! Storyboard-nya udah termasuk prompt video Bahasa Inggris siap generate." });
-      setPhase("done");
+      pushMsg({
+        sender: "ai",
+        kind: "storyboard-id",
+        storyboardIndo: data.storyboard,
+        text: "Nih storyboard-nya! Cek dulu narasi & konsistensi karakternya, kalau udah oke tinggal klik lanjut buat generate prompt video Bahasa Inggris.",
+      });
     } catch (err: any) {
       removeMsg(loadingId);
       pushMsg({ sender: "ai", kind: "text", text: `Maaf, gagal nyusun storyboard: ${err.message}` });
       setPhase("qa");
+    }
+  }
+
+  // ─── Step 4: Indonesian storyboard confirmed → final English prompts ────
+  async function handleConfirmStoryboard(storyboard: StoryboardIndoData) {
+    if (!selectedConcept) return;
+    const loadingId = pushLoading("Oke, aku ubah tiap baris storyboard jadi prompt video Bahasa Inggris ya, konsisten karakter & gaya visualnya...");
+    try {
+      const data = await callApi("/api/video-ai/refine-scenes", {
+        storyboard,
+        aspectRatio: "9:16",
+        voice: selectedConcept.recommendedVoice || "Zephyr",
+        bgmId: selectedConcept.recommendedBgm || "bsl1",
+        apiKey,
+      });
+      removeMsg(loadingId);
+      pushMsg({ sender: "ai", kind: "storyboard", refinedData: data.refinedData, text: "Nih hasilnya! Prompt video Bahasa Inggris siap generate, konsisten karakter & gaya visualnya di semua klip." });
+      setPhase("done");
+    } catch (err: any) {
+      removeMsg(loadingId);
+      pushMsg({ sender: "ai", kind: "text", text: `Maaf, gagal bikin prompt final: ${err.message}` });
     }
   }
 
@@ -293,6 +367,7 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
 
   function handleSend() {
     if (phase === "brief") handleSendBrief();
+    else if (phase === "qa-custom") handleCustomQASubmit();
   }
 
   return (
@@ -322,6 +397,7 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
             onPickConcept={handlePickConcept}
             onQAAnswer={handleQAAnswer}
             onQASkip={handleQASkip}
+            onConfirmStoryboard={handleConfirmStoryboard}
             onGenerateScene={handleGenerateScene}
             onSendToKlipAI={onSendToKlipAI}
           />
@@ -342,13 +418,19 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            disabled={phase !== "brief"}
-            placeholder={phase === "brief" ? "Contoh: kerja remote dari kafe, buat YouTube Shorts, target pekerja muda 22-30 tahun..." : "Klik salah satu opsi di atas untuk lanjut"}
+            disabled={phase !== "brief" && phase !== "qa-custom"}
+            placeholder={
+              phase === "brief"
+                ? "Contoh: kerja remote dari kafe, buat YouTube Shorts, target pekerja muda 22-30 tahun..."
+                : phase === "qa-custom"
+                ? "Tulis jawabanmu sendiri..."
+                : "Klik salah satu opsi di atas untuk lanjut"
+            }
             className="flex-1 text-sm p-3 rounded-2xl bg-slate-950 border border-slate-700 text-white placeholder-slate-500 focus:border-purple-500 outline-none disabled:opacity-50"
           />
           <button
             type="submit"
-            disabled={phase !== "brief" || !input.trim()}
+            disabled={(phase !== "brief" && phase !== "qa-custom") || !input.trim()}
             className="p-3 bg-gradient-to-r from-purple-600 to-indigo-600 disabled:opacity-40 text-white rounded-2xl shadow"
           >
             <Send className="w-4 h-4" />
@@ -367,6 +449,7 @@ function ChatBubble({
   onPickConcept,
   onQAAnswer,
   onQASkip,
+  onConfirmStoryboard,
   onGenerateScene,
   onSendToKlipAI,
 }: {
@@ -374,8 +457,9 @@ function ChatBubble({
   quality: VeoQuality;
   setQuality: (q: VeoQuality) => void;
   onPickConcept: (c: Concept) => void;
-  onQAAnswer: (msgId: string, key: QAKey, value: string) => void;
-  onQASkip: (msgId: string, key: QAKey) => void;
+  onQAAnswer: (msgId: string, key: string, value: string) => void;
+  onQASkip: (msgId: string, key: string) => void;
+  onConfirmStoryboard: (storyboard: StoryboardIndoData) => void;
   onGenerateScene: (msgId: string, sceneNumber: number) => void;
   onSendToKlipAI?: (projectData: any) => void | Promise<void>;
 }) {
@@ -428,12 +512,16 @@ function ChatBubble({
 
         {msg.kind === "quick-replies" && msg.qaKey && (
           <div className="mt-2.5 flex flex-wrap gap-1.5">
-            {(msg.qaOptions || []).map((opt) => (
+            {[...(msg.qaOptions || []), CUSTOM_OPTION].map((opt) => (
               <button
                 key={opt}
                 disabled={msg.answered}
                 onClick={() => onQAAnswer(msg.id, msg.qaKey!, opt)}
-                className="text-xs font-bold px-3 py-1.5 rounded-xl border border-slate-700 bg-slate-950 text-slate-200 hover:border-purple-500 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                className={`text-xs font-bold px-3 py-1.5 rounded-xl border transition-all disabled:opacity-40 disabled:cursor-not-allowed ${
+                  opt === CUSTOM_OPTION
+                    ? "border-dashed border-slate-600 bg-transparent text-slate-400 hover:border-purple-500 hover:text-white"
+                    : "border-slate-700 bg-slate-950 text-slate-200 hover:border-purple-500 hover:text-white"
+                }`}
               >
                 {opt}
               </button>
@@ -446,6 +534,10 @@ function ChatBubble({
               Skip
             </button>
           </div>
+        )}
+
+        {msg.kind === "storyboard-id" && msg.storyboardIndo && (
+          <StoryboardIndoTable data={msg.storyboardIndo} onConfirm={() => onConfirmStoryboard(msg.storyboardIndo!)} />
         )}
 
         {msg.kind === "storyboard" && msg.refinedData && (
@@ -469,6 +561,71 @@ function ConceptCard({ concept, onClick, rare }: { concept: Concept; onClick: ()
       <p className="text-xs text-slate-400 mt-1">{concept.summary}</p>
       <p className="text-xs text-purple-300 italic mt-1.5">"{concept.hook}"</p>
     </button>
+  );
+}
+
+function StoryboardIndoTable({ data, onConfirm }: { data: StoryboardIndoData; onConfirm: () => void }) {
+  const [confirmed, setConfirmed] = useState(false);
+  const profile = data.consistencyProfile;
+
+  return (
+    <div className="mt-3 space-y-3">
+      <p className="text-sm font-black text-white">{data.videoTitle}</p>
+
+      {data.concept30s && (
+        <div className="space-y-1.5 text-xs bg-slate-950/60 rounded-xl p-3 border border-slate-800">
+          <p><span className="font-black text-pink-400">Masalah (3 detik pertama): </span>{data.concept30s.problemHook}</p>
+          <p><span className="font-black text-pink-400">Titik balik: </span>{data.concept30s.turningPoint}</p>
+          <p><span className="font-black text-pink-400">Perasaan yang dibawa pulang: </span>{data.concept30s.takeawayFeeling}</p>
+        </div>
+      )}
+
+      {profile && (profile.character || profile.visualStyle || profile.environment) && (
+        <div className="text-xs bg-purple-950/20 rounded-xl p-3 border border-purple-500/30 space-y-1">
+          <p className="font-black text-purple-300 mb-1">🔒 Konsisten di semua klip</p>
+          {profile.character && <p><span className="font-bold text-purple-300">Karakter: </span>{profile.character}</p>}
+          {profile.environment && <p><span className="font-bold text-purple-300">Lokasi: </span>{profile.environment}</p>}
+          {profile.visualStyle && <p><span className="font-bold text-purple-300">Gaya visual: </span>{profile.visualStyle}</p>}
+          {profile.lighting && <p><span className="font-bold text-purple-300">Pencahayaan: </span>{profile.lighting}</p>}
+        </div>
+      )}
+
+      <div className="overflow-x-auto rounded-xl border border-slate-800">
+        <table className="w-full text-[11px] border-collapse">
+          <thead>
+            <tr className="bg-slate-900 text-slate-400">
+              <th className="p-2 text-left font-black border-b border-slate-800">No</th>
+              <th className="p-2 text-left font-black border-b border-slate-800">Detik</th>
+              <th className="p-2 text-left font-black border-b border-slate-800">Apa yang terlihat</th>
+              <th className="p-2 text-left font-black border-b border-slate-800">Narasi/dialog</th>
+              <th className="p-2 text-left font-black border-b border-slate-800">Emosi</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.rows.map((r) => (
+              <tr key={r.id} className="border-b border-slate-800/60 align-top text-slate-300">
+                <td className="p-2 font-bold text-purple-300">{r.id}</td>
+                <td className="p-2 whitespace-nowrap text-slate-400">{r.startSec}–{r.endSec}</td>
+                <td className="p-2 italic">{r.visual}</td>
+                <td className="p-2">{r.narration}</td>
+                <td className="p-2 text-slate-400">{r.emotion}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <button
+        onClick={() => {
+          setConfirmed(true);
+          onConfirm();
+        }}
+        disabled={confirmed}
+        className="w-full text-xs font-black px-3 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 text-white disabled:opacity-50"
+      >
+        {confirmed ? "Lagi bikin prompt video..." : "✅ Lanjut: Buat Prompt Video Bahasa Inggris →"}
+      </button>
+    </div>
   );
 }
 
