@@ -4,8 +4,13 @@
  * Modeled on renderQueue.ts's enqueue/status/persist pattern, but far simpler:
  * no Lambda/S3, just a direct Gemini API call. `generateVideos` kicks off a
  * long-running operation (11s–6min per Google's docs); we poll it in the
- * background and, once done, download the result to public/veo-output/ so it
- * can be served as a plain static file.
+ * background and, once done, download the result to data/veo-output/.
+ *
+ * Output deliberately lives OUTSIDE public/, not inside it: a `next start`
+ * production server does not pick up files added to public/ after boot (only
+ * what existed there at build/start time is served — anything written later
+ * 404s). Files here are instead streamed by /api/video-ai/file/[jobId],
+ * a normal dynamic route handler that reads the file fresh on every request.
  */
 
 import path from "path";
@@ -22,7 +27,7 @@ const execAsync = promisify(exec);
 const genai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
 const JOBS_FILE = "veo-jobs.json";
-const OUTPUT_DIR = path.join(process.cwd(), "public", "veo-output");
+export const OUTPUT_DIR = path.join(process.cwd(), "data", "veo-output");
 const POLL_INTERVAL_MS = 10_000; // matches Google's own recommended poll cadence
 const HISTORY_RETENTION_MS = 7 * 24 * 60 * 60 * 1000; // 7 days — generated clips are large, keep window short
 
@@ -176,7 +181,7 @@ async function runJob(job: VeoJobState) {
     }
 
     job.status = "done";
-    job.videoUrl = `/veo-output/${job.jobId}.mp4`;
+    job.videoUrl = `/api/video-ai/file/${job.jobId}`;
     job.finishedAt = Date.now();
     scheduleSave();
   } catch (err: any) {
