@@ -39,7 +39,6 @@ interface ConsistencyProfile {
 
 interface StoryboardRow {
   id: string;
-  clipGroup: number;
   startSec: number;
   endSec: number;
   visual: string;
@@ -333,6 +332,16 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
     }
   }
 
+  async function handleGenerateAllScenes(msgId: string) {
+    const msg = messages.find((m) => m.id === msgId);
+    const pending = (msg?.refinedData?.scenes || []).filter((s) => !s.veoStatus);
+    for (const sc of pending) {
+      handleGenerateScene(msgId, sc.sceneNumber);
+      // Small stagger so the burst of requests doesn't hit the API all at once.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+  }
+
   function patchScene(msgId: string, sceneNumber: number, patch: Partial<Scene>) {
     setMessages((prev) =>
       prev.map((m) => {
@@ -399,6 +408,7 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
             onQASkip={handleQASkip}
             onConfirmStoryboard={handleConfirmStoryboard}
             onGenerateScene={handleGenerateScene}
+            onGenerateAll={handleGenerateAllScenes}
             onSendToKlipAI={onSendToKlipAI}
           />
         ))}
@@ -451,6 +461,7 @@ function ChatBubble({
   onQASkip,
   onConfirmStoryboard,
   onGenerateScene,
+  onGenerateAll,
   onSendToKlipAI,
 }: {
   msg: ChatMsg;
@@ -461,6 +472,7 @@ function ChatBubble({
   onQASkip: (msgId: string, key: string) => void;
   onConfirmStoryboard: (storyboard: StoryboardIndoData) => void;
   onGenerateScene: (msgId: string, sceneNumber: number) => void;
+  onGenerateAll: (msgId: string) => void;
   onSendToKlipAI?: (projectData: any) => void | Promise<void>;
 }) {
   const isUser = msg.sender === "user";
@@ -541,7 +553,7 @@ function ChatBubble({
         )}
 
         {msg.kind === "storyboard" && msg.refinedData && (
-          <StoryboardResult data={msg.refinedData} msgId={msg.id} quality={quality} setQuality={setQuality} onGenerateScene={onGenerateScene} onSendToKlipAI={onSendToKlipAI} />
+          <StoryboardResult data={msg.refinedData} msgId={msg.id} quality={quality} setQuality={setQuality} onGenerateScene={onGenerateScene} onGenerateAll={onGenerateAll} onSendToKlipAI={onSendToKlipAI} />
         )}
       </div>
     </div>
@@ -635,6 +647,7 @@ function StoryboardResult({
   quality,
   setQuality,
   onGenerateScene,
+  onGenerateAll,
   onSendToKlipAI,
 }: {
   data: RefinedData;
@@ -642,11 +655,16 @@ function StoryboardResult({
   quality: VeoQuality;
   setQuality: (q: VeoQuality) => void;
   onGenerateScene: (msgId: string, sceneNumber: number) => void;
+  onGenerateAll: (msgId: string) => void;
   onSendToKlipAI?: (projectData: any) => void | Promise<void>;
 }) {
   const [isSending, setIsSending] = useState(false);
+  const [isGeneratingAll, setIsGeneratingAll] = useState(false);
   const totalCost = data.scenes.reduce((acc, s) => acc + (s.duration || 8), 0) * QUALITY_PRICE_PER_SEC[quality];
   const doneCount = data.scenes.filter((s) => s.veoStatus === "done" && s.videoUrl).length;
+  const pendingScenes = data.scenes.filter((s) => !s.veoStatus);
+  const pendingCount = pendingScenes.length;
+  const pendingCost = pendingScenes.reduce((acc, s) => acc + (s.duration || 8), 0) * QUALITY_PRICE_PER_SEC[quality];
 
   async function handleSend() {
     if (!onSendToKlipAI) return;
@@ -679,6 +697,30 @@ function StoryboardResult({
         <div className="text-xs bg-purple-950/20 rounded-xl p-3 border border-purple-500/30">
           <span className="font-black text-purple-300">🧑 Karakter: </span>{data.characterDescription}
         </div>
+      )}
+
+      {pendingCount > 0 && (
+        <button
+          onClick={async () => {
+            setIsGeneratingAll(true);
+            try {
+              await onGenerateAll(msgId);
+            } finally {
+              setIsGeneratingAll(false);
+            }
+          }}
+          disabled={isGeneratingAll}
+          className="w-full text-xs font-black px-3 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-black disabled:opacity-50 flex items-center justify-center gap-1.5"
+        >
+          {isGeneratingAll ? (
+            <>
+              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              <span>Memulai semua klip...</span>
+            </>
+          ) : (
+            <span>🎬✨ Generate Semua Klip ({pendingCount}) — ${pendingCost.toFixed(2)}</span>
+          )}
+        </button>
       )}
 
       <div className="space-y-2">

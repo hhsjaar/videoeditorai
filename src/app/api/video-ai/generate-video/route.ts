@@ -9,8 +9,10 @@ import { enqueueVeoJob, type VeoQuality } from "@/lib/veoQueue";
 const VALID_QUALITIES: VeoQuality[] = ["lite", "fast", "standard"];
 const VALID_DURATIONS = [4, 6, 8];
 
+// Rounds UP to the nearest Veo-legal duration (never down) — a clip shorter
+// than its narration's actual length would chop the voiceover off mid-word.
 function clampToVeoDuration(requested: number): 4 | 6 | 8 {
-  return VALID_DURATIONS.reduce((closest, v) => (Math.abs(v - requested) < Math.abs(closest - requested) ? v : closest), 8) as 4 | 6 | 8;
+  return (VALID_DURATIONS.find((v) => v >= requested) ?? 8) as 4 | 6 | 8;
 }
 
 export async function POST(req: NextRequest) {

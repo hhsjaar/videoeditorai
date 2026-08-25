@@ -27,9 +27,11 @@ const RESPONSE_SCHEMA = {
   required: ["scenes"],
 };
 
+// Rounds UP to the nearest Veo-legal duration (never down) — a clip shorter
+// than its narration's actual length would chop the voiceover off mid-word.
 function clampToVeoDuration(requested: number): 4 | 6 | 8 {
-  const options = [4, 6, 8];
-  return options.reduce((closest, v) => (Math.abs(v - requested) < Math.abs(closest - requested) ? v : closest), 8) as 4 | 6 | 8;
+  const options: Array<4 | 6 | 8> = [4, 6, 8];
+  return options.find((v) => v >= requested) ?? 8;
 }
 
 export async function POST(req: NextRequest) {

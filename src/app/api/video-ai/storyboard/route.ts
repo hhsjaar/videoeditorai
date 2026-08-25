@@ -4,18 +4,21 @@ import { GoogleGenAI } from "@google/genai";
 const ROW_SCHEMA = {
   type: "object",
   properties: {
-    id: { type: "string", description: "Label baris, contoh '1A', '1B', '2A' — angka = nomor klip 10 detik, huruf = paruh 5 detik di dalamnya" },
-    clipGroup: { type: "integer", description: "Nomor klip 10-detik yang jadi induk baris ini (1, 2, 3, ...)" },
-    startSec: { type: "integer" },
-    endSec: { type: "integer" },
+    id: { type: "string", description: "Nomor urut baris/klip, contoh '1', '2', '3'" },
+    durationSec: { type: "integer", enum: [4, 6, 8], description: "Durasi klip ini dalam detik — HARUS salah satu dari 4, 6, atau 8 (batasan teknis AI video engine, TIDAK BOLEH nilai lain seperti 5 atau 10)" },
+    startSec: { type: "integer", description: "Detik mulai klip ini relatif ke keseluruhan video (kumulatif dari durasi klip-klip sebelumnya)" },
+    endSec: { type: "integer", description: "startSec + durationSec" },
     visual: {
       type: "string",
       description: "Deskripsi Indonesia detail apa yang terlihat di layar. Kalau video ini punya karakter utama, WAJIB buka dengan deskripsi karakter (umur, pakaian, rambut, ciri khas) PERSIS SAMA KATA-PER-KATA seperti di consistencyProfile.character, lalu lanjutkan dengan aksi spesifik di baris ini.",
     },
-    narration: { type: "string", description: "Narasi/dialog Bahasa Indonesia yang natural (bukan bahasa iklan), pas untuk durasi baris ini" },
+    narration: {
+      type: "string",
+      description: "Narasi/dialog Bahasa Indonesia yang natural (bukan bahasa iklan). PANJANGNYA HARUS PAS untuk durationSec klip ini berdasarkan kecepatan bicara natural (~2.5-3 kata per detik) — jangan sampai kepanjangan (suara kepotong pas video berakhir) atau kependekan (banyak jeda diam).",
+    },
     emotion: { type: "string", description: "Emosi/mood singkat, contoh: 'Netral, tenang' atau 'Sadar, agak kaget'" },
   },
-  required: ["id", "clipGroup", "startSec", "endSec", "visual", "narration", "emotion"],
+  required: ["id", "durationSec", "startSec", "endSec", "visual", "narration", "emotion"],
 };
 
 const RESPONSE_SCHEMA = {
@@ -43,7 +46,7 @@ const RESPONSE_SCHEMA = {
       },
       required: ["character", "visualStyle", "environment", "lighting", "cameraLanguage"],
     },
-    rows: { type: "array", minItems: 4, items: ROW_SCHEMA, description: "Baris-baris storyboard, dikelompokkan per klip 10 detik, tiap klip dipecah jadi 2 baris @5 detik (A dan B)" },
+    rows: { type: "array", minItems: 3, items: ROW_SCHEMA, description: "Baris-baris storyboard — tiap baris adalah SATU klip AI video yang berdiri sendiri, durasinya langsung salah satu dari 4/6/8 detik" },
   },
   required: ["videoTitle", "concept30s", "consistencyProfile", "rows"],
 };
@@ -69,7 +72,7 @@ export async function POST(req: NextRequest) {
       .map(([k, v]) => `- ${k}: ${v}`)
       .join("\n") || "(tidak ada, ikuti konsep apa adanya)";
 
-    const numClips = Math.max(2, Math.round(targetDuration / 10));
+    const numRows = Math.max(3, Math.round(targetDuration / 6));
 
     const systemPrompt = `Anda adalah sutradara + penulis naskah untuk video pendek AI-generated.
 
@@ -79,7 +82,7 @@ Konsep video hasil riset:
 - Jawaban klarifikasi dari user:
 ${answersText}
 
-Tugas: Buatkan storyboard untuk video ${targetDuration} detik, dipecah jadi ${numClips} klip @10 detik (klip terakhir boleh menyesuaikan sisa durasi). Setiap klip 10 detik WAJIB dipecah lagi jadi 2 baris @5 detik (paruh A dan B) supaya tiap baris bisa berdiri sendiri secara visual dan gampang di-generate AI video engine per potongan.
+Tugas: Buatkan storyboard untuk video total ${targetDuration} detik, berisi sekitar ${numRows} baris/klip berurutan. SETIAP baris = SATU klip AI video yang nanti langsung di-generate apa adanya (tidak dipecah/digabung lagi), jadi durasinya HARUS pas.
 
 Aturan WAJIB:
 1. Isi dulu "concept30s": masalah yang dirasain penonton di detik-detik pertama, titik balik ceritanya, dan perasaan yang harus dibawa pulang penonton.
@@ -87,7 +90,9 @@ Aturan WAJIB:
 3. Setiap baris "visual": kalau ada karakter utama, buka deskripsi baris itu dengan deskripsi karakter PERSIS SAMA KATA-PER-KATA seperti di consistencyProfile.character (jangan diringkas/diubah sedikit pun), baru lanjut ke aksi spesifik & environment baris itu (juga konsisten dengan consistencyProfile.environment).
 4. Tulis narasi dalam Bahasa Indonesia yang natural mengalir seperti orang cerita, BUKAN bahasa iklan yang kaku. Kalau digabung semua baris, narasinya harus mengalir jadi satu naskah utuh dengan hook di awal dan penutup yang pas di akhir.
 5. "emotion" singkat, 2-4 kata, sesuai momen di baris itu.
-6. clipGroup dan id harus konsisten: klip 1 = baris "1A" & "1B", klip 2 = "2A" & "2B", dst.`;
+6. "durationSec" tiap baris HARUS salah satu dari 4, 6, atau 8 detik — TIDAK BOLEH nilai lain (bukan 5, bukan 10). DEFAULT ke 6 detik untuk sebagian besar baris (lebih lega buat narasi & gerakan kamera), pakai 4 detik hanya untuk beat cepat/transisi singkat, dan 8 detik hanya untuk momen yang butuh napas lebih panjang. Total durasi semua baris harus mendekati ${targetDuration} detik.
+7. "startSec" dan "endSec" HARUS kumulatif akurat: baris pertama startSec=0, baris berikutnya startSec = endSec baris sebelumnya, dan endSec = startSec + durationSec.
+8. PALING PENTING: panjang "narration" tiap baris harus PAS kalau diucapkan dalam durationSec baris itu (kecepatan bicara natural ~2.5-3 kata/detik) — misal baris 6 detik idealnya sekitar 15-18 kata. JANGAN menulis narasi yang lebih panjang dari itu, karena nanti suaranya akan kepotong di video hasil generate. Lebih baik narasi sedikit lebih pendek/ada jeda natural daripada kepanjangan.`;
 
     const candidateModels = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-flash-latest"];
     let responseText = "";
