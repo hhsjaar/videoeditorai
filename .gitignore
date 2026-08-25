@@ -47,3 +47,10 @@ next-env.d.ts
 # Render temp files (served by Next.js, cleaned up after render)
 public/render-tmp/
 tmp/render-output/
+
+# Persisted job store / render history (server-local state)
+/data/
+
+# Video AI generated output (server-local, regenerated on demand)
+/public/veo-output/
+/public/generated-ai/

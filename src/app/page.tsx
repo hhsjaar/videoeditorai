@@ -46,6 +46,9 @@ import {
   MessageSquare,
 } from "lucide-react";
 import { MainCompositionProps, FootageItem, TransitionItem, SubtitleChunk, TitleOverlayConfig } from "../remotion/types";
+import { Navbar, ActiveTabType } from "../components/Navbar";
+import { VideoAIGenerator } from "../components/VideoAIGenerator";
+import { AnimasiAIPlaceholder } from "../components/AnimasiAIPlaceholder";
 
 const RemotionPlayerWrapper = dynamic(
   () => import("../components/RemotionPlayerWrapper").then((m) => m.RemotionPlayerWrapper),
@@ -133,6 +136,18 @@ const TITLE_OUT_ANIMATIONS = [
 ];
 
 export default function CapCutWebStudio() {
+  const [activeAppTab, setActiveAppTab] = useState<ActiveTabType>("video-ai");
+  const [apiKey, setApiKey] = useState<string>("");
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const savedKey = localStorage.getItem("gemini_api_key");
+      if (savedKey) {
+        setApiKey(savedKey);
+      }
+    }
+  }, []);
+
   const [viewMode, setViewMode] = useState<"wizard" | "studio">("wizard");
   const [includeEndingCover, setIncludeEndingCover] = useState<boolean>(true);
 
@@ -1789,86 +1804,140 @@ export default function CapCutWebStudio() {
     return `${mins.toString().padStart(2, "0")}:${secs.padStart(2, "0")}`;
   };
 
+  // Handle transfer from Video AI to Klip AI editor
+  const handleSendFromVideoAIToKlipAI = useCallback((projectData: any) => {
+    if (!projectData) return;
+    if (projectData.fullScript) setRawScript(projectData.fullScript);
+    if (projectData.voice) setSelectedVoice(projectData.voice);
+    if (projectData.bgmId) {
+      const track = PRESET_VIRAL_BGM_TRACKS.find((t) => t.id === projectData.bgmId);
+      if (track) setBgmUrl(track.url);
+    }
+
+    if (projectData.scenes && Array.isArray(projectData.scenes)) {
+      const newFootages: UploadedFootage[] = projectData.scenes.map((sc: any, idx: number) => ({
+        id: `ai-scene-${idx}-${Date.now()}`,
+        file: new File([], `Scene ${sc.sceneNumber || idx + 1}.png`),
+        previewUrl: sc.visualUrl || "/generated-ai/placeholder.jpg",
+        name: sc.overlayTitle ? `${sc.overlayTitle} (Scene ${idx + 1})` : `Scene ${idx + 1}`,
+        duration: sc.duration || 5,
+        startFromSec: 0,
+        isImage: true,
+      }));
+      setFootages(newFootages);
+    }
+
+    setActiveAppTab("klip-ai");
+    setViewMode("studio");
+  }, []);
+
   return (
     <div className="flex flex-col h-screen w-screen bg-[#121215] text-slate-100 font-sans select-none overflow-hidden relative">
-      {/* CONCEPT GENERATION FULL-SCREEN ANIMATED LOADING OVERLAY */}
-      {isGeneratingConcept && (
-        <div className="fixed inset-0 z-[100] bg-black/85 backdrop-blur-2xl flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-300">
-          <div className="max-w-md w-full p-8 bg-[#18181c] border border-indigo-500/40 rounded-3xl shadow-2xl space-y-6 relative overflow-hidden">
-            {/* Ambient Pendar Accent */}
-            <div className="absolute -top-10 -left-10 w-40 h-40 bg-indigo-600/30 rounded-full blur-2xl pointer-events-none" />
-            <div className="absolute -bottom-10 -right-10 w-40 h-40 bg-purple-600/30 rounded-full blur-2xl pointer-events-none" />
+      {/* GLOBAL NAVBAR ACROSS 3 MAIN FEATURES */}
+      <Navbar
+        activeTab={activeAppTab}
+        onTabChange={setActiveAppTab}
+      />
 
-            <div className="relative z-10 flex flex-col items-center gap-4">
-              <div className="relative">
-                <div className="w-16 h-16 rounded-2xl bg-gradient-to-r from-indigo-500 via-purple-500 to-amber-400 p-0.5 animate-spin">
-                  <div className="w-full h-full bg-[#121215] rounded-2xl flex items-center justify-center">
-                    <Sparkles className="w-8 h-8 text-amber-300 animate-pulse" />
-                  </div>
-                </div>
-                <Loader2 className="w-8 h-8 text-indigo-400 animate-spin absolute inset-0 m-auto" />
-              </div>
-
-              <div className="space-y-1">
-                <h3 className="text-lg font-black text-white tracking-tight bg-gradient-to-r from-indigo-400 via-purple-300 to-amber-300 bg-clip-text text-transparent">
-                  Memproses Video Konsep AI...
-                </h3>
-                <p className="text-xs text-slate-400">
-                  AI sedang memotong bagian tengah klip, menyinkronkan voice over & memasang cover akhiran.
-                </p>
-              </div>
-
-              {/* STEP PROGRESS BADGES */}
-              <div className="w-full space-y-2 pt-2 border-t border-[#27272a]">
-                <div className="flex items-center justify-center gap-2 text-xs text-emerald-400 font-bold">
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>Center Part Auto-Cut Trim Active</span>
-                </div>
-                <div className="flex items-center justify-center gap-2 text-xs text-indigo-300 font-bold">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Sinkronisasi Durasi VO & Buka Studio...</span>
-                </div>
-              </div>
-            </div>
-          </div>
+      {/* FEATURE 2: VIDEO AI (GEMINI ENGINE) */}
+      {activeAppTab === "video-ai" && (
+        <div className="flex-1 overflow-y-auto">
+          <VideoAIGenerator
+            apiKey={apiKey}
+            onSendToKlipAI={handleSendFromVideoAIToKlipAI}
+          />
         </div>
       )}
 
-      {/* TOP HEADER BAR WITH MODE SWITCH */}
-      <div className="h-12 bg-[#18181c] border-b border-[#27272a] px-4 flex items-center justify-between text-xs font-bold z-50 flex-shrink-0">
-        <div className="flex items-center gap-2">
-          <Sparkles className="w-5 h-5 text-indigo-400 animate-pulse" />
-          <span className="text-sm font-extrabold bg-gradient-to-r from-indigo-400 via-purple-400 to-amber-300 bg-clip-text text-transparent">
-            Burjolevelup Video Editor
-          </span>
+      {/* FEATURE 3: ANIMASI AI (COMING SOON) */}
+      {activeAppTab === "animasi-ai" && (
+        <div className="flex-1 overflow-y-auto">
+          <AnimasiAIPlaceholder
+            onExploreVideoAI={() => setActiveAppTab("video-ai")}
+          />
         </div>
+      )}
 
-        {/* VIEW MODE TOGGLE BUTTONS */}
-        <div className="flex items-center gap-1 bg-[#09090b] p-1 rounded-xl border border-[#27272a]">
-          <button
-            onClick={() => setViewMode("wizard")}
-            className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${viewMode === "wizard"
-                ? "bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md font-extrabold"
-                : "text-slate-400 hover:text-white"
-              }`}
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Wizard Generator</span>
-          </button>
-          <button
-            onClick={() => setViewMode("studio")}
-            className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${viewMode === "studio"
-                ? "bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md font-extrabold"
-                : "text-slate-400 hover:text-white"
-              }`}
-          >
-            <VideoIcon className="w-3.5 h-3.5" />
-            <span>Studio Workspace</span>
-          </button>
-        </div>
-      </div>
+      {/* FEATURE 1: KLIP AI (EXISTING AUTO VIDEO EDITOR) */}
+      {activeAppTab === "klip-ai" && (
+        <div className="flex-1 flex flex-col overflow-hidden relative">
+          {/* CONCEPT GENERATION FULL-SCREEN ANIMATED LOADING OVERLAY */}
+          {isGeneratingConcept && (
+            <div className="fixed inset-0 z-[100] bg-black/85 backdrop-blur-2xl flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-300">
+              <div className="max-w-md w-full p-8 bg-[#18181c] border border-indigo-500/40 rounded-3xl shadow-2xl space-y-6 relative overflow-hidden">
+                <div className="absolute -top-10 -left-10 w-40 h-40 bg-indigo-600/30 rounded-full blur-2xl pointer-events-none" />
+                <div className="absolute -bottom-10 -right-10 w-40 h-40 bg-purple-600/30 rounded-full blur-2xl pointer-events-none" />
 
-      {viewMode === "wizard" ? (
+                <div className="relative z-10 flex flex-col items-center gap-4">
+                  <div className="relative">
+                    <div className="w-16 h-16 rounded-2xl bg-gradient-to-r from-indigo-500 via-purple-500 to-amber-400 p-0.5 animate-spin">
+                      <div className="w-full h-full bg-[#121215] rounded-2xl flex items-center justify-center">
+                        <Sparkles className="w-8 h-8 text-amber-300 animate-pulse" />
+                      </div>
+                    </div>
+                    <Loader2 className="w-8 h-8 text-indigo-400 animate-spin absolute inset-0 m-auto" />
+                  </div>
+
+                  <div className="space-y-1">
+                    <h3 className="text-lg font-black text-white tracking-tight bg-gradient-to-r from-indigo-400 via-purple-300 to-amber-300 bg-clip-text text-transparent">
+                      Memproses Video Konsep AI...
+                    </h3>
+                    <p className="text-xs text-slate-400">
+                      AI sedang memotong bagian tengah klip, menyinkronkan voice over & memasang cover akhiran.
+                    </p>
+                  </div>
+
+                  <div className="w-full space-y-2 pt-2 border-t border-[#27272a]">
+                    <div className="flex items-center justify-center gap-2 text-xs text-emerald-400 font-bold">
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>Center Part Auto-Cut Trim Active</span>
+                    </div>
+                    <div className="flex items-center justify-center gap-2 text-xs text-indigo-300 font-bold">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Sinkronisasi Durasi VO & Buka Studio...</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TOP HEADER BAR FOR KLIP AI WITH WIZARD / STUDIO SWITCH */}
+          <div className="h-11 bg-[#18181c] border-b border-[#27272a] px-4 flex items-center justify-between text-xs font-bold z-40 flex-shrink-0">
+            <div className="flex items-center gap-2 text-slate-300">
+              <Film className="w-4 h-4 text-indigo-400" />
+              <span className="text-xs font-extrabold text-white">
+                Klip AI Workspace
+              </span>
+            </div>
+
+            <div className="flex items-center gap-1 bg-[#09090b] p-1 rounded-xl border border-[#27272a]">
+              <button
+                onClick={() => setViewMode("wizard")}
+                className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  viewMode === "wizard"
+                    ? "bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md font-extrabold"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Wizard Generator</span>
+              </button>
+              <button
+                onClick={() => setViewMode("studio")}
+                className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                  viewMode === "studio"
+                    ? "bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-md font-extrabold"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                <VideoIcon className="w-3.5 h-3.5" />
+                <span>Studio Workspace</span>
+              </button>
+            </div>
+          </div>
+
+          {viewMode === "wizard" ? (
         /* 1. LANDING PAGE: STUNNING VISUAL GENERATOR WIZARD VIEW */
         <div className="flex-1 bg-[#09090b] overflow-y-auto p-4 md:p-8 pb-24 flex flex-col items-center justify-start relative scroll-smooth">
           {/* BACKGROUND GLOW ACCENTS */}
@@ -4025,7 +4094,10 @@ export default function CapCutWebStudio() {
           </div>
         </div>
       )}
-    </div>
 
+      {/* Close Klip AI tab wrapper */}
+        </div>
+      )}
+    </div>
   );
 }
