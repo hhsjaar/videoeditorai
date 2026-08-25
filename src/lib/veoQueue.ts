@@ -10,9 +10,14 @@
 
 import path from "path";
 import { mkdir, rm, readdir, stat } from "fs/promises";
+import { exec } from "child_process";
+import { promisify } from "util";
 import { GoogleGenAI } from "@google/genai";
 import { loadPersistedJobs, persistJobs } from "./jobPersistence";
 import { QUALITY_TO_MODEL, type VeoQuality } from "./veoPricing";
+import { getCachedFfmpeg } from "./renderQueue";
+
+const execAsync = promisify(exec);
 
 const genai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
 
@@ -147,7 +152,28 @@ async function runJob(job: VeoJobState) {
 
     await mkdir(OUTPUT_DIR, { recursive: true });
     const outPath = path.join(OUTPUT_DIR, `${job.jobId}.mp4`);
-    await genai.files.download({ file: generated.video, downloadPath: outPath });
+    const rawPath = path.join(OUTPUT_DIR, `${job.jobId}.raw.mp4`);
+    await genai.files.download({ file: generated.video, downloadPath: rawPath });
+
+    // Veo's raw download writes the moov atom at the END of the file (not
+    // "faststart"), which makes HTML5 <video> show a black frame / 0:00
+    // duration until the whole file has downloaded. Remux (no re-encode) to
+    // move moov to the front so it streams/plays immediately in-browser.
+    const ffmpegBin = await getCachedFfmpeg();
+    if (ffmpegBin) {
+      try {
+        await execAsync(`"${ffmpegBin}" -y -i "${rawPath}" -c copy -movflags +faststart "${outPath}"`, { timeout: 60000 });
+        await rm(rawPath, { force: true });
+      } catch (remuxErr: any) {
+        console.warn(`[veoQueue] faststart remux failed for ${job.jobId}, serving raw file:`, remuxErr?.message?.slice(0, 200));
+        await rm(outPath, { force: true }).catch(() => {});
+        const { rename } = await import("fs/promises");
+        await rename(rawPath, outPath);
+      }
+    } else {
+      const { rename } = await import("fs/promises");
+      await rename(rawPath, outPath);
+    }
 
     job.status = "done";
     job.videoUrl = `/veo-output/${job.jobId}.mp4`;

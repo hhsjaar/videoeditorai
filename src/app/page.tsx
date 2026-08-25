@@ -1804,8 +1804,10 @@ export default function CapCutWebStudio() {
     return `${mins.toString().padStart(2, "0")}:${secs.padStart(2, "0")}`;
   };
 
-  // Handle transfer from Video AI to Klip AI editor
-  const handleSendFromVideoAIToKlipAI = useCallback((projectData: any) => {
+  // Handle transfer from Video AI to Klip AI editor — fetches each generated
+  // scene's actual bytes (video or placeholder image) so it can be rendered,
+  // not just previewed (a stub empty File would silently break export).
+  const handleSendFromVideoAIToKlipAI = useCallback(async (projectData: any) => {
     if (!projectData) return;
     if (projectData.fullScript) setRawScript(projectData.fullScript);
     if (projectData.voice) setSelectedVoice(projectData.voice);
@@ -1815,15 +1817,32 @@ export default function CapCutWebStudio() {
     }
 
     if (projectData.scenes && Array.isArray(projectData.scenes)) {
-      const newFootages: UploadedFootage[] = projectData.scenes.map((sc: any, idx: number) => ({
-        id: `ai-scene-${idx}-${Date.now()}`,
-        file: new File([], `Scene ${sc.sceneNumber || idx + 1}.png`),
-        previewUrl: sc.visualUrl || "/generated-ai/placeholder.jpg",
-        name: sc.overlayTitle ? `${sc.overlayTitle} (Scene ${idx + 1})` : `Scene ${idx + 1}`,
-        duration: sc.duration || 5,
-        startFromSec: 0,
-        isImage: true,
-      }));
+      const results = await Promise.all(
+        projectData.scenes.map(async (sc: any, idx: number): Promise<UploadedFootage | null> => {
+          const hasRealVideo = Boolean(sc.videoUrl);
+          const url = sc.videoUrl || sc.visualUrl;
+          if (!url) return null;
+          try {
+            const res = await fetch(url);
+            const blob = await res.blob();
+            const ext = hasRealVideo ? "mp4" : url.split(".").pop() || "jpg";
+            const file = new File([blob], `Scene ${sc.sceneNumber || idx + 1}.${ext}`, { type: blob.type });
+            return {
+              id: `ai-scene-${idx}-${Date.now()}`,
+              file,
+              previewUrl: URL.createObjectURL(blob),
+              name: sc.overlayTitle ? `${sc.overlayTitle} (Scene ${idx + 1})` : `Scene ${idx + 1}`,
+              duration: sc.duration || 5,
+              startFromSec: 0,
+              isImage: !hasRealVideo,
+            };
+          } catch (err) {
+            console.error(`Failed to fetch scene ${idx + 1} for Klip AI:`, err);
+            return null;
+          }
+        })
+      );
+      const newFootages = results.filter((f): f is UploadedFootage => f !== null);
       setFootages(newFootages);
     }
 
@@ -1842,7 +1861,7 @@ export default function CapCutWebStudio() {
       {/* FEATURE 2: VIDEO AI (GEMINI ENGINE) */}
       {activeAppTab === "video-ai" && (
         <div className="flex-1 overflow-y-auto">
-          <VideoAIChat apiKey={apiKey} />
+          <VideoAIChat apiKey={apiKey} onSendToKlipAI={handleSendFromVideoAIToKlipAI} />
         </div>
       )}
 

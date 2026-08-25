@@ -35,6 +35,8 @@ interface RefinedData {
   concept30s?: { problemHook: string; turningPoint: string; takeawayFeeling: string };
   characterDescription?: string;
   aspectRatio: string;
+  voice?: string;
+  bgmId?: string;
   scenes: Scene[];
 }
 
@@ -64,9 +66,10 @@ const nextId = () => `m${++idCounter}_${Date.now()}`;
 
 interface VideoAIChatProps {
   apiKey?: string;
+  onSendToKlipAI?: (projectData: any) => void | Promise<void>;
 }
 
-export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey }) => {
+export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI }) => {
   const [messages, setMessages] = useState<ChatMsg[]>([
     {
       id: nextId(),
@@ -320,6 +323,7 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey }) => {
             onQAAnswer={handleQAAnswer}
             onQASkip={handleQASkip}
             onGenerateScene={handleGenerateScene}
+            onSendToKlipAI={onSendToKlipAI}
           />
         ))}
         <div ref={endRef} />
@@ -364,6 +368,7 @@ function ChatBubble({
   onQAAnswer,
   onQASkip,
   onGenerateScene,
+  onSendToKlipAI,
 }: {
   msg: ChatMsg;
   quality: VeoQuality;
@@ -372,6 +377,7 @@ function ChatBubble({
   onQAAnswer: (msgId: string, key: QAKey, value: string) => void;
   onQASkip: (msgId: string, key: QAKey) => void;
   onGenerateScene: (msgId: string, sceneNumber: number) => void;
+  onSendToKlipAI?: (projectData: any) => void | Promise<void>;
 }) {
   const isUser = msg.sender === "user";
 
@@ -443,7 +449,7 @@ function ChatBubble({
         )}
 
         {msg.kind === "storyboard" && msg.refinedData && (
-          <StoryboardResult data={msg.refinedData} msgId={msg.id} quality={quality} setQuality={setQuality} onGenerateScene={onGenerateScene} />
+          <StoryboardResult data={msg.refinedData} msgId={msg.id} quality={quality} setQuality={setQuality} onGenerateScene={onGenerateScene} onSendToKlipAI={onSendToKlipAI} />
         )}
       </div>
     </div>
@@ -472,14 +478,33 @@ function StoryboardResult({
   quality,
   setQuality,
   onGenerateScene,
+  onSendToKlipAI,
 }: {
   data: RefinedData;
   msgId: string;
   quality: VeoQuality;
   setQuality: (q: VeoQuality) => void;
   onGenerateScene: (msgId: string, sceneNumber: number) => void;
+  onSendToKlipAI?: (projectData: any) => void | Promise<void>;
 }) {
+  const [isSending, setIsSending] = useState(false);
   const totalCost = data.scenes.reduce((acc, s) => acc + (s.duration || 8), 0) * QUALITY_PRICE_PER_SEC[quality];
+  const doneCount = data.scenes.filter((s) => s.veoStatus === "done" && s.videoUrl).length;
+
+  async function handleSend() {
+    if (!onSendToKlipAI) return;
+    setIsSending(true);
+    try {
+      await onSendToKlipAI({
+        fullScript: data.scenes.map((s) => s.voiceoverText).filter(Boolean).join(" "),
+        voice: data.voice,
+        bgmId: data.bgmId,
+        scenes: data.scenes,
+      });
+    } finally {
+      setIsSending(false);
+    }
+  }
 
   return (
     <div className="mt-3 space-y-3">
@@ -546,6 +571,25 @@ function StoryboardResult({
         </div>
         <span className="text-[10px] text-slate-500">Total kalau generate semua: <strong className="text-amber-400">${totalCost.toFixed(2)}</strong></span>
       </div>
+
+      {onSendToKlipAI && (
+        <div className="pt-1 border-t border-slate-800">
+          <button
+            onClick={handleSend}
+            disabled={isSending}
+            className="w-full mt-3 text-xs font-black px-3 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 text-white disabled:opacity-50 flex items-center justify-center gap-1.5"
+          >
+            {isSending ? (
+              <>
+                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                <span>Menyiapkan klip...</span>
+              </>
+            ) : (
+              <span>➡️ Satukan di Klip AI Studio Workspace {doneCount > 0 ? `(${doneCount}/${data.scenes.length} video siap)` : "(pakai preview dulu)"}</span>
+            )}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
