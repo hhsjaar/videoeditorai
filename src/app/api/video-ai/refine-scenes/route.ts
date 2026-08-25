@@ -20,13 +20,23 @@ const RESPONSE_SCHEMA = {
   properties: {
     videoTitle: { type: "string" },
     summary: { type: "string" },
+    concept30s: {
+      type: "object",
+      description: "Breakdown konsep video 30 detik sebelum masuk ke storyboard per-scene",
+      properties: {
+        problemHook: { type: "string", description: "Masalah yang dirasain penonton di 3 detik pertama" },
+        turningPoint: { type: "string", description: "Titik balik ceritanya" },
+        takeawayFeeling: { type: "string", description: "Perasaan yang harus dibawa pulang penonton" },
+      },
+      required: ["problemHook", "turningPoint", "takeawayFeeling"],
+    },
     characterDescription: {
       type: "string",
       description: "Deskripsi karakter utama (umur, pakaian, rambut, ciri khas) yang HARUS dipakai identik di setiap scene yang menampilkan karakter — string kosong jika video ini faceless/tanpa karakter tetap.",
     },
     scenes: { type: "array", minItems: 4, maxItems: 6, items: SCENE_SCHEMA },
   },
-  required: ["videoTitle", "summary", "characterDescription", "scenes"],
+  required: ["videoTitle", "summary", "concept30s", "characterDescription", "scenes"],
 };
 
 export async function POST(req: NextRequest) {
@@ -67,12 +77,13 @@ Detail Input:
 - Target Total Durasi: ${targetDuration} detik (buat antara 4 sampai 6 adegan/scene, total durasi mendekati target)
 
 Aturan Penting:
-1. Buat antara 4 sampai 6 scenes. Setiap scene HARUS bisa berdiri sendiri secara visual.
-2. Kalau konsep video ini menampilkan karakter utama (bukan video faceless/b-roll murni), tentukan SATU "characterDescription" (umur, pakaian, rambut, ciri khas) di awal. Setiap "visualPrompt" scene yang menampilkan karakter itu WAJIB merujuk deskripsi yang SAMA PERSIS — supaya karakternya konsisten dari scene ke scene, bukan berubah-ubah. Kalau videonya faceless, kosongkan characterDescription dan jangan sebut karakter di visualPrompt manapun.
-3. "duration" tiap scene HARUS salah satu dari 4, 6, atau 8 detik saja (batasan teknis AI video engine) — jangan nilai lain.
-4. "visualPrompt": Bahasa Inggris, sangat deskriptif, fotorealistik/sinematik (sebutkan subjek+deskripsi detail, aksi spesifik, lokasi & waktu, pergerakan kamera, pencahayaan & mood, gaya visual, 8k resolution, photorealistic cinematic film).
-5. "voiceoverText": Bahasa Indonesia yang natural, komunikatif, bukan bahasa iklan kaku, pas dengan durasi.
-6. Seluruh naskah voiceover jika digabungkan harus mengalir enak didengar dan memiliki hook, isi yang padat, dan call-to-action di akhir.`;
+1. Sebelum masuk ke scene, isi dulu "concept30s": masalah yang dirasain penonton di 3 detik pertama, titik balik ceritanya di mana, dan perasaan apa yang harus dibawa pulang penonton di akhir.
+2. Buat antara 4 sampai 6 scenes. Setiap scene HARUS bisa berdiri sendiri secara visual.
+3. Kalau konsep video ini menampilkan karakter utama (bukan video faceless/b-roll murni), tentukan SATU "characterDescription" (umur, pakaian, rambut, ciri khas) di awal. Setiap "visualPrompt" scene yang menampilkan karakter itu WAJIB merujuk deskripsi yang SAMA PERSIS — supaya karakternya konsisten dari scene ke scene, bukan berubah-ubah. Kalau videonya faceless, kosongkan characterDescription dan jangan sebut karakter di visualPrompt manapun.
+4. "duration" tiap scene HARUS salah satu dari 4, 6, atau 8 detik saja (batasan teknis AI video engine) — jangan nilai lain.
+5. "visualPrompt": Bahasa Inggris, sangat deskriptif, fotorealistik/sinematik (sebutkan subjek+deskripsi detail, aksi spesifik, lokasi & waktu, pergerakan kamera, pencahayaan & mood, gaya visual, 8k resolution, photorealistic cinematic film).
+6. "voiceoverText": Bahasa Indonesia yang natural, komunikatif, bukan bahasa iklan kaku, pas dengan durasi.
+7. Seluruh naskah voiceover jika digabungkan harus mengalir enak didengar dan memiliki hook, isi yang padat, dan call-to-action di akhir.`;
 
     const candidateModels = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-flash-latest"];
     let responseText = "";

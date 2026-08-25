@@ -47,7 +47,7 @@ import {
 } from "lucide-react";
 import { MainCompositionProps, FootageItem, TransitionItem, SubtitleChunk, TitleOverlayConfig } from "../remotion/types";
 import { Navbar, ActiveTabType } from "../components/Navbar";
-import { VideoAIGenerator } from "../components/VideoAIGenerator";
+import { VideoAIChat } from "../components/VideoAIChat";
 import { AnimasiAIPlaceholder } from "../components/AnimasiAIPlaceholder";
 
 const RemotionPlayerWrapper = dynamic(
@@ -1842,10 +1842,7 @@ export default function CapCutWebStudio() {
       {/* FEATURE 2: VIDEO AI (GEMINI ENGINE) */}
       {activeAppTab === "video-ai" && (
         <div className="flex-1 overflow-y-auto">
-          <VideoAIGenerator
-            apiKey={apiKey}
-            onSendToKlipAI={handleSendFromVideoAIToKlipAI}
-          />
+          <VideoAIChat apiKey={apiKey} />
         </div>
       )}
 
