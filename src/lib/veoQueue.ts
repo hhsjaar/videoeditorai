@@ -117,43 +117,78 @@ export function enqueueVeoJob(params: {
   return state;
 }
 
+const MAX_ATTEMPTS = 3; // 1 initial + 2 automatic retries
+const RETRY_DELAY_MS = 8_000;
+
+// Google's Veo backend intermittently returns a generic "internal server
+// issue" (its own message literally says "please try again in a few
+// minutes") — this is transient noise, not a real failure, and happens for
+// a meaningful fraction of requests. Retry automatically rather than
+// forcing the user to notice and click "Coba lagi" every time. Content
+// safety rejections and hard API errors (bad args, quota) won't succeed on
+// retry, so those are NOT retried — only the transient message is.
+function isRetryableError(message: string): boolean {
+  return /internal server issue|please try again/i.test(message);
+}
+
+async function attemptGenerate(job: VeoJobState): Promise<{ video: any }> {
+  const model = QUALITY_TO_MODEL[job.quality];
+  let operation = await genai.models.generateVideos({
+    model,
+    source: { prompt: job.prompt },
+    config: {
+      numberOfVideos: 1,
+      durationSeconds: job.durationSeconds,
+      aspectRatio: job.aspectRatio,
+      // NOTE: generateAudio and personGeneration are Vertex-only knobs —
+      // the Gemini Developer API (what GEMINI_API_KEY authenticates
+      // against) generates native audio by default on Veo 3.x models and
+      // rejects both fields if set explicitly, so leave them unset here.
+    },
+  });
+  job.operationName = operation.name || null;
+  scheduleSave();
+
+  while (!operation.done) {
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+    operation = await genai.operations.getVideosOperation({ operation });
+  }
+
+  if (operation.error) {
+    const msg = typeof operation.error.message === "string" ? operation.error.message : "Video generation gagal di sisi Gemini.";
+    throw new Error(msg);
+  }
+
+  const generated = operation.response?.generatedVideos?.[0];
+  if (!generated?.video) {
+    const raiReason = operation.response?.raiMediaFilteredReasons?.[0];
+    throw new Error(raiReason || "Gemini tidak mengembalikan video (kemungkinan diblokir filter keamanan konten).");
+  }
+
+  return { video: generated.video };
+}
+
 async function runJob(job: VeoJobState) {
   job.status = "generating";
   scheduleSave();
 
   try {
-    const model = QUALITY_TO_MODEL[job.quality];
-    let operation = await genai.models.generateVideos({
-      model,
-      source: { prompt: job.prompt },
-      config: {
-        numberOfVideos: 1,
-        durationSeconds: job.durationSeconds,
-        aspectRatio: job.aspectRatio,
-        // NOTE: generateAudio and personGeneration are Vertex-only knobs —
-        // the Gemini Developer API (what GEMINI_API_KEY authenticates
-        // against) generates native audio by default on Veo 3.x models and
-        // rejects both fields if set explicitly, so leave them unset here.
-      },
-    });
-    job.operationName = operation.name || null;
-    scheduleSave();
+    let generated: { video: any } | null = null;
+    let lastErr: any = null;
 
-    while (!operation.done) {
-      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-      operation = await genai.operations.getVideosOperation({ operation });
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        generated = await attemptGenerate(job);
+        break;
+      } catch (err: any) {
+        lastErr = err;
+        const retryable = isRetryableError(err?.message || "");
+        console.warn(`[veoQueue] Attempt ${attempt}/${MAX_ATTEMPTS} failed for ${job.jobId}${retryable ? ", retrying..." : " (not retryable)"}:`, err?.message);
+        if (!retryable || attempt === MAX_ATTEMPTS) throw err;
+        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+      }
     }
-
-    if (operation.error) {
-      const msg = typeof operation.error.message === "string" ? operation.error.message : "Video generation gagal di sisi Gemini.";
-      throw new Error(msg);
-    }
-
-    const generated = operation.response?.generatedVideos?.[0];
-    if (!generated?.video) {
-      const raiReason = operation.response?.raiMediaFilteredReasons?.[0];
-      throw new Error(raiReason || "Gemini tidak mengembalikan video (kemungkinan diblokir filter keamanan konten).");
-    }
+    if (!generated) throw lastErr || new Error("Gagal generate video.");
 
     await mkdir(OUTPUT_DIR, { recursive: true });
     const outPath = path.join(OUTPUT_DIR, `${job.jobId}.mp4`);
