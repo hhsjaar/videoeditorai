@@ -43,6 +43,11 @@ export interface VeoJobState {
   durationSeconds: number; // requested duration
   actualDurationSeconds: number | null; // measured from the downloaded file — Veo doesn't always hit the requested length exactly
   aspectRatio: string;
+  // Optional seed frame for image-to-video generation (Video AI's image-upload
+  // flow) — Veo animates from this image instead of imagining the scene from
+  // text alone, which matters for real/specific reference photos.
+  imageBytes: string | null;
+  imageMimeType: string | null;
   operationName: string | null;
   videoUrl: string | null;
   error: string | null;
@@ -94,6 +99,8 @@ export function enqueueVeoJob(params: {
   quality: VeoQuality;
   durationSeconds: number;
   aspectRatio: string;
+  imageBytes?: string;
+  imageMimeType?: string;
 }): VeoJobState {
   const state: VeoJobState = {
     jobId: params.jobId,
@@ -103,6 +110,8 @@ export function enqueueVeoJob(params: {
     durationSeconds: params.durationSeconds,
     actualDurationSeconds: null,
     aspectRatio: params.aspectRatio,
+    imageBytes: params.imageBytes || null,
+    imageMimeType: params.imageMimeType || null,
     operationName: null,
     videoUrl: null,
     error: null,
@@ -156,9 +165,12 @@ async function probeDurationSeconds(filePath: string, ffmpegBin: string): Promis
 
 async function attemptGenerate(job: VeoJobState): Promise<{ video: any }> {
   const model = QUALITY_TO_MODEL[job.quality];
+  const source = job.imageBytes
+    ? { prompt: job.prompt, image: { imageBytes: job.imageBytes, mimeType: job.imageMimeType || "image/jpeg" } }
+    : { prompt: job.prompt };
   let operation = await genai.models.generateVideos({
     model,
-    source: { prompt: job.prompt },
+    source,
     config: {
       numberOfVideos: 1,
       durationSeconds: job.durationSeconds,

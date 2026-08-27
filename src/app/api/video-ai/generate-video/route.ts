@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { GoogleGenAI } from "@google/genai";
 import fs from "fs";
 import path from "path";
 import { writeFile, mkdir } from "fs/promises";
@@ -41,7 +40,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const ai = new GoogleGenAI({ apiKey: activeApiKey });
     const scenes = refinedData.scenes;
 
     // Ensure public output dir exists for generated assets
@@ -53,38 +51,25 @@ export async function POST(req: NextRequest) {
     const generatedScenes: any[] = [];
     const timestamp = Date.now();
 
-    // 1. Process each scene: generate visuals
+    // 1. Process each scene: build a placeholder poster (covers the player
+    // while the real Veo job is in flight) and kick off generation.
     for (let i = 0; i < scenes.length; i++) {
       const sc = scenes[i];
       const visualPrompt = sc.visualPrompt || `Cinematic scene ${i + 1} for ${refinedData.videoTitle || "Video"}`;
       let visualUrl = "";
 
-      // Try generating image via Imagen 3.0 if available
-      try {
-        const imageResult = await ai.models.generateImages({
-          model: "imagen-3.0-generate-002",
-          prompt: `${visualPrompt}, high resolution 8k, cinematic photography, dramatic lighting, aspect ratio ${refinedData.aspectRatio === "16:9" ? "16:9" : "9:16"}`,
-          config: {
-            numberOfImages: 1,
-            aspectRatio: refinedData.aspectRatio === "16:9" ? "16:9" : refinedData.aspectRatio === "1:1" ? "1:1" : "9:16",
-            outputMimeType: "image/jpeg",
-          },
-        });
-
-        if (imageResult?.generatedImages?.[0]?.image?.imageBytes) {
-          const buffer = Buffer.from(imageResult.generatedImages[0].image.imageBytes, "base64");
-          const filename = `scene_${timestamp}_${i + 1}.jpg`;
-          const filePath = path.join(publicGenDir, filename);
-          await writeFile(filePath, buffer);
-          visualUrl = `/generated-ai/${filename}`;
-        }
-      } catch (imgErr: any) {
-        console.warn(`Imagen generation note for scene ${i + 1}:`, imgErr?.message || imgErr);
+      // Scenes anchored to a reference/storyboard image already have a real
+      // photo to show as the poster — no need to generate one.
+      if (sc.sourceImageBase64) {
+        const ext = sc.sourceImageMimeType === "image/png" ? "png" : "jpg";
+        const filename = `scene_src_${timestamp}_${i + 1}.${ext}`;
+        await writeFile(path.join(publicGenDir, filename), Buffer.from(sc.sourceImageBase64, "base64"));
+        visualUrl = `/generated-ai/${filename}`;
       }
 
-      // If Imagen was not available or rate limited, generate a stylized SVG/Canvas visual
+      // Otherwise, generate a stylized SVG placeholder locally (free, instant —
+      // no external image-gen call on the critical path).
       if (!visualUrl) {
-        const styleTheme = (refinedData.stylePreset || "cinematic").toLowerCase();
         const colors = [
           ["#1e1b4b", "#4338ca", "#06b6d4"],
           ["#311042", "#831843", "#f43f5e"],
@@ -148,6 +133,11 @@ export async function POST(req: NextRequest) {
           quality: veoQuality,
           durationSeconds: clampToVeoDuration(sc.duration || 8),
           aspectRatio: refinedData.aspectRatio === "16:9" ? "16:9" : "9:16",
+          // When this scene came from an uploaded/storyboard reference image,
+          // Veo animates FROM that photo instead of imagining it from text —
+          // keeps real places/products faithful instead of hallucinated.
+          imageBytes: sc.sourceImageBase64 || undefined,
+          imageMimeType: sc.sourceImageMimeType || undefined,
         });
       }
 
