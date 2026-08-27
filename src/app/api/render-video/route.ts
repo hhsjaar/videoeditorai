@@ -19,9 +19,14 @@ async function preTrimWithFfmpeg(
   const ssArg = startFromSec > 0.01 ? `-ss ${startFromSec.toFixed(3)}` : "";
   const tArg = `-t ${durationSec.toFixed(3)}`;
 
+  // -map picks streams explicitly (video + optional audio, "?" = don't fail if
+  // absent) instead of relying on ffmpeg's default stream selection, which has
+  // been known to drop an original audio track silently on some containers.
+  const mapArgs = `-map 0:v:0 -map 0:a:0?`;
+
   // Try stream-copy first (fast, no re-encode)
   try {
-    const cmd = `"${ffmpegBin}" -y ${ssArg} -i "${inputPath}" ${tArg} -c copy -avoid_negative_ts make_zero "${outputPath}"`;
+    const cmd = `"${ffmpegBin}" -y ${ssArg} -i "${inputPath}" ${tArg} ${mapArgs} -c copy -avoid_negative_ts make_zero "${outputPath}"`;
     console.log(`[render-video] ffmpeg cmd: ${cmd}`);
     await execAsync(cmd, { timeout: 60000 });
     return true;
@@ -29,7 +34,7 @@ async function preTrimWithFfmpeg(
     console.warn(`[render-video] stream-copy failed, trying re-encode:`, err1?.message?.slice(0, 200));
     try {
       await execAsync(
-        `"${ffmpegBin}" -y ${ssArg} -i "${inputPath}" ${tArg} -c:v libx264 -preset ultrafast -crf 23 -c:a aac -ar 44100 "${outputPath}"`,
+        `"${ffmpegBin}" -y ${ssArg} -i "${inputPath}" ${tArg} ${mapArgs} -c:v libx264 -preset ultrafast -crf 23 -c:a aac -ar 44100 "${outputPath}"`,
         { timeout: 120000 }
       );
       return true;
@@ -76,6 +81,9 @@ export async function POST(req: NextRequest) {
     const bgmUrl = (formData.get("bgmUrl") as string) || "";
     const audioDurationSec = parseFloat((formData.get("audioDurationSec") as string) || "0");
     const subtitleText = (formData.get("subtitleText") as string) || "";
+    // Older clients that never sent this flag get the legacy default (auto-caption
+    // on) so their exports keep matching what they saw before this flag existed.
+    const autoCaptionEnabled = (formData.get("autoCaptionEnabled") as string | null) !== "false";
     const editingStyle = (formData.get("editingStyle") as string) || "fast-viral";
     const subtitleStyle = (formData.get("subtitleStyle") as string) || "plain-shadow";
     const subtitleFontSize = parseInt((formData.get("subtitleFontSize") as string) || "44");
@@ -221,8 +229,12 @@ export async function POST(req: NextRequest) {
     }
 
 
-    // 6. Auto-generate subtitles from text if none provided
-    if (subtitleChunksList.length === 0 && subtitleText.trim()) {
+    // 6. Auto-generate subtitles from text if none provided — but only when the
+    // studio's auto-caption toggle is actually on. Without this gate, any project
+    // that has a script (e.g. a Video AI handoff, which never wanted captions)
+    // would get them silently burned in on export even though the live preview
+    // never showed them.
+    if (autoCaptionEnabled && subtitleChunksList.length === 0 && subtitleText.trim()) {
       const textChunks = splitTextIntoAutoCaptionChunks(subtitleText, 3);
       const voDuration = audioDurationSec > 0 ? audioDurationSec : footageItems.reduce((acc, f) => acc + f.duration, 0);
       const chunkDur = voDuration / Math.max(1, textChunks.length);

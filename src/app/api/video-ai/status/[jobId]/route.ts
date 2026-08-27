@@ -21,5 +21,6 @@ export async function GET(
     status: job.status, // "pending" | "generating" | "done" | "error"
     videoUrl: job.videoUrl,
     error: job.error,
+    actualDurationSeconds: job.actualDurationSeconds ?? null,
   });
 }

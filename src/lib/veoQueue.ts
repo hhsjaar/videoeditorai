@@ -40,7 +40,8 @@ export interface VeoJobState {
   status: VeoJobStatus;
   prompt: string;
   quality: VeoQuality;
-  durationSeconds: number;
+  durationSeconds: number; // requested duration
+  actualDurationSeconds: number | null; // measured from the downloaded file — Veo doesn't always hit the requested length exactly
   aspectRatio: string;
   operationName: string | null;
   videoUrl: string | null;
@@ -100,6 +101,7 @@ export function enqueueVeoJob(params: {
     prompt: params.prompt,
     quality: params.quality,
     durationSeconds: params.durationSeconds,
+    actualDurationSeconds: null,
     aspectRatio: params.aspectRatio,
     operationName: null,
     videoUrl: null,
@@ -129,6 +131,27 @@ const RETRY_DELAY_MS = 8_000;
 // retry, so those are NOT retried — only the transient message is.
 function isRetryableError(message: string): boolean {
   return /internal server issue|please try again/i.test(message);
+}
+
+// Veo doesn't always hit the exact requested duration (e.g. asked for 6s,
+// comes back at 5.7s) — if the timeline trusts the requested length instead
+// of the real one, the Sequence window runs past the last actual frame and
+// OffthreadVideo just holds/freezes on it, making the cut into the next clip
+// look like a stutter. Measuring the real file length keeps the timeline
+// honest. Reuses ffmpeg itself (no separate ffprobe dependency): running it
+// with no output makes it print "Duration: HH:MM:SS.ss" to stderr and exit
+// non-zero, which we parse out of the thrown error's captured output.
+async function probeDurationSeconds(filePath: string, ffmpegBin: string): Promise<number | null> {
+  try {
+    await execAsync(`"${ffmpegBin}" -i "${filePath}" -hide_banner`, { timeout: 15000 });
+    return null; // unreachable in practice — ffmpeg with no -c/output always errors
+  } catch (err: any) {
+    const output: string = err?.stderr || err?.stdout || "";
+    const match = output.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
+    if (!match) return null;
+    const [, hh, mm, ss] = match;
+    return parseInt(hh, 10) * 3600 + parseInt(mm, 10) * 60 + parseFloat(ss);
+  }
 }
 
 async function attemptGenerate(job: VeoJobState): Promise<{ video: any }> {
@@ -213,6 +236,13 @@ async function runJob(job: VeoJobState) {
     } else {
       const { rename } = await import("fs/promises");
       await rename(rawPath, outPath);
+    }
+
+    if (ffmpegBin) {
+      job.actualDurationSeconds = await probeDurationSeconds(outPath, ffmpegBin);
+      if (job.actualDurationSeconds !== null) {
+        console.log(`[veoQueue] ${job.jobId}: requested ${job.durationSeconds}s, actual ${job.actualDurationSeconds.toFixed(2)}s`);
+      }
     }
 
     job.status = "done";
