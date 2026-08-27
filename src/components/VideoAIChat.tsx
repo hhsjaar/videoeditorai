@@ -365,7 +365,14 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
         if (!res.ok) throw new Error(data.error || "Gagal cek status.");
         if (data.status === "done" || data.status === "error") {
           clearInterval(interval);
-          patchScene(msgId, sceneNumber, { veoStatus: data.status, videoUrl: data.videoUrl || null, veoError: data.error || null });
+          patchScene(msgId, sceneNumber, {
+            veoStatus: data.status,
+            videoUrl: data.videoUrl || null,
+            veoError: data.error || null,
+            // Veo doesn't always land exactly on the requested duration — use the
+            // measured length so the timeline doesn't freeze-pad a short clip.
+            ...(typeof data.actualDurationSeconds === "number" ? { duration: data.actualDurationSeconds } : {}),
+          });
         }
       } catch (err: any) {
         clearInterval(interval);
@@ -660,11 +667,39 @@ function StoryboardResult({
 }) {
   const [isSending, setIsSending] = useState(false);
   const [isGeneratingAll, setIsGeneratingAll] = useState(false);
+  const [isMerging, setIsMerging] = useState(false);
+  const [mergedUrl, setMergedUrl] = useState<string | null>(null);
+  const [mergeError, setMergeError] = useState<string | null>(null);
   const totalCost = data.scenes.reduce((acc, s) => acc + (s.duration || 8), 0) * QUALITY_PRICE_PER_SEC[quality];
   const doneCount = data.scenes.filter((s) => s.veoStatus === "done" && s.videoUrl).length;
   const pendingScenes = data.scenes.filter((s) => !s.veoStatus);
   const pendingCount = pendingScenes.length;
   const pendingCost = pendingScenes.reduce((acc, s) => acc + (s.duration || 8), 0) * QUALITY_PRICE_PER_SEC[quality];
+  const allDone = data.scenes.length > 0 && doneCount === data.scenes.length;
+
+  async function handleMergeAll() {
+    setIsMerging(true);
+    setMergeError(null);
+    try {
+      const jobIds = data.scenes
+        .slice()
+        .sort((a, b) => a.sceneNumber - b.sceneNumber)
+        .map((s) => s.veoJobId)
+        .filter((id): id is string => !!id);
+      const res = await fetch("/api/video-ai/merge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobIds }),
+      });
+      const resData = await res.json();
+      if (!res.ok || !resData.success) throw new Error(resData.error || "Gagal menggabungkan video.");
+      setMergedUrl(resData.videoUrl);
+    } catch (err: any) {
+      setMergeError(err.message);
+    } finally {
+      setIsMerging(false);
+    }
+  }
 
   async function handleSend() {
     if (!onSendToKlipAI) return;
@@ -770,6 +805,33 @@ function StoryboardResult({
         </div>
         <span className="text-[10px] text-slate-500">Total kalau generate semua: <strong className="text-amber-400">${totalCost.toFixed(2)}</strong></span>
       </div>
+
+      {allDone && (
+        <div className="pt-1 border-t border-slate-800 space-y-2">
+          {mergedUrl ? (
+            <div className="space-y-1.5">
+              <video src={mergedUrl} controls className="w-full rounded-lg max-h-80 bg-black" />
+              <a href={mergedUrl} download className="inline-block text-xs font-bold text-purple-400">⬇ Download Video Gabungan (MP4)</a>
+            </div>
+          ) : (
+            <button
+              onClick={handleMergeAll}
+              disabled={isMerging}
+              className="w-full mt-3 text-xs font-black px-3 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-black disabled:opacity-50 flex items-center justify-center gap-1.5"
+            >
+              {isMerging ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  <span>Menggabungkan semua klip...</span>
+                </>
+              ) : (
+                <span>🎞️ Gabungkan & Download Video Utuh ({data.scenes.length} klip)</span>
+              )}
+            </button>
+          )}
+          {mergeError && <p className="text-xs text-red-400 font-bold">{mergeError}</p>}
+        </div>
+      )}
 
       {onSendToKlipAI && (
         <div className="pt-1 border-t border-slate-800">

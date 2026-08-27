@@ -64,6 +64,42 @@ interface UploadedFootage {
   startFromSec?: number;
   isImage?: boolean;
   keepOriginalAudio?: boolean;
+  // The exact narration line this clip carries (Video AI scenes only) — lets
+  // auto-subtitle place captions against each clip's own known duration
+  // instead of guessing timing from the whole script at once.
+  sceneScript?: string;
+}
+
+// Splits a script into comfortable ~6-8 word phrase chunks aligned to
+// punctuation clauses — shared by the whole-script subtitle estimate and the
+// per-clip one (each clip's own narration line gets the same treatment).
+function splitIntoPhraseChunks(text: string): string[] {
+  const clean = text.trim();
+  if (!clean) return [];
+
+  const clauses = clean.split(/(?<=[.!?,\n;:])\s+/).filter(Boolean);
+  const chunks: string[] = [];
+
+  for (const clause of clauses) {
+    const words = clause.split(/\s+/).filter(Boolean);
+    if (words.length === 0) continue;
+
+    if (words.length <= 8) {
+      chunks.push(words.join(" "));
+    } else {
+      for (let i = 0; i < words.length; i += 6) {
+        const sub = words.slice(i, i + 6);
+        if (i + 6 < words.length && words.length - (i + 6) <= 2) {
+          chunks.push(words.slice(i, i + 8).join(" "));
+          i += 2;
+        } else {
+          chunks.push(sub.join(" "));
+        }
+      }
+    }
+  }
+
+  return chunks.length > 0 ? chunks : [clean];
 }
 
 const AVAILABLE_TRANSITIONS = [
@@ -874,11 +910,11 @@ export default function CapCutWebStudio() {
     const part2Dur = Math.max(0.5, parseFloat((originalDur - part1Dur).toFixed(1)));
 
     const part2Clip: UploadedFootage = {
+      ...targetClip,
       id: `${Date.now()}_split`,
-      file: targetClip.file,
-      previewUrl: targetClip.previewUrl,
       name: `${targetClip.name} (Part 2)`,
       duration: part2Dur,
+      startFromSec: (targetClip.startFromSec || 0) + part1Dur,
     };
 
     const updatedFootages = [...footages];
@@ -1513,6 +1549,7 @@ export default function CapCutWebStudio() {
       formData.append("audioDurationSec", audioDurationSec.toString());
 
       formData.append("subtitleText", polishedScript || rawScript);
+      formData.append("autoCaptionEnabled", String(autoCaptionGenerated));
       formData.append("editingStyle", editingStyle);
       formData.append("subtitleStyle", subtitleStyle);
       formData.append("subtitleFontSize", subtitleFontSize.toString());
@@ -1631,42 +1668,50 @@ export default function CapCutWebStudio() {
   }, [transitionsMap]);
 
   const textToSplit = polishedScript || rawScript;
-  const textChunks: string[] = useMemo(() => {
-    const clean = textToSplit.trim();
-    if (!clean) return [];
-
-    // Split script into comfortable, relaxed 6-8 word phrase chunks aligned with punctuation clauses
-    const clauses = clean.split(/(?<=[.!?,\n;:])\s+/).filter(Boolean);
-    const chunks: string[] = [];
-
-    for (const clause of clauses) {
-      const words = clause.split(/\s+/).filter(Boolean);
-      if (words.length === 0) continue;
-
-      if (words.length <= 8) {
-        chunks.push(words.join(" "));
-      } else {
-        for (let i = 0; i < words.length; i += 6) {
-          const sub = words.slice(i, i + 6);
-          if (i + 6 < words.length && words.length - (i + 6) <= 2) {
-            chunks.push(words.slice(i, i + 8).join(" "));
-            i += 2;
-          } else {
-            chunks.push(sub.join(" "));
-          }
-        }
-      }
-    }
-
-    return chunks.length > 0 ? chunks : [clean];
-  }, [textToSplit]);
+  const textChunks: string[] = useMemo(() => splitIntoPhraseChunks(textToSplit), [textToSplit]);
 
   const totalVideoDurationSec = useMemo(() => {
     return previewFootages.reduce((acc, f) => acc + f.duration, 0) || 10;
   }, [previewFootages]);
 
+  // Auto-subtitle for Video AI clips: each clip carries its own known narration
+  // line (sceneScript) and, now that scene durations are measured from the real
+  // generated file, its own exact on-timeline window — so captions can be placed
+  // per-clip instead of estimating from the script against the whole video at
+  // once. Word-count-weighted (not the fancier syllable/silence-aware estimate
+  // used for TTS'd VO below, which needs continuous prose — these are short,
+  // independent lines).
+  const perClipSubtitles: SubtitleChunk[] = useMemo(() => {
+    if (!footages.some((f) => f.sceneScript)) return [];
+    const results: SubtitleChunk[] = [];
+    let cursor = 0;
+    previewFootages.forEach((pf, idx) => {
+      const script = footages[idx]?.sceneScript;
+      const clipStart = cursor;
+      cursor += pf.duration;
+      if (!script) return;
+      const chunks = splitIntoPhraseChunks(script);
+      if (chunks.length === 0) return;
+      const weights = chunks.map((c) => Math.max(1, c.split(/\s+/).length));
+      const totalWeight = weights.reduce((a, b) => a + b, 0);
+      let acc = clipStart;
+      chunks.forEach((chunk, i) => {
+        const dur = (weights[i] / totalWeight) * pf.duration;
+        results.push({
+          text: chunk,
+          start: parseFloat(acc.toFixed(3)),
+          end: parseFloat(Math.min(clipStart + pf.duration, acc + dur).toFixed(3)),
+        });
+        acc += dur;
+      });
+    });
+    return results;
+  }, [footages, previewFootages]);
+
   const previewSubtitles: SubtitleChunk[] = useMemo(() => {
-    if (!autoCaptionGenerated || textChunks.length === 0) return [];
+    if (!autoCaptionGenerated) return [];
+    if (perClipSubtitles.length > 0) return perClipSubtitles;
+    if (textChunks.length === 0) return [];
 
     const targetSpanDuration = (audioUrl && audioDurationSec > 0)
       ? audioDurationSec
@@ -1762,7 +1807,7 @@ export default function CapCutWebStudio() {
       currentAccSec += dur;
     }
     return results;
-  }, [textChunks, autoCaptionGenerated, audioUrl, audioDurationSec, totalVideoDurationSec, wordTimings]);
+  }, [textChunks, autoCaptionGenerated, audioUrl, audioDurationSec, totalVideoDurationSec, wordTimings, perClipSubtitles]);
 
   const remotionCompositionProps: MainCompositionProps = useMemo(() => ({
     footages: previewFootages,
@@ -1843,6 +1888,9 @@ export default function CapCutWebStudio() {
               isImage: !hasRealVideo,
               // Veo-generated clips carry their own voice/dialogue audio — keep it audible.
               keepOriginalAudio: hasRealVideo,
+              // Lets auto-subtitle place captions against this clip's own known
+              // duration instead of guessing from the whole script at once.
+              sceneScript: sc.voiceoverText || undefined,
             };
           } catch (err) {
             console.error(`Failed to fetch scene ${idx + 1} for Klip AI:`, err);
