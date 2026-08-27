@@ -581,10 +581,13 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
   async function handleGenerateAllScenes(msgId: string) {
     const msg = messages.find((m) => m.id === msgId);
     const pending = (msg?.refinedData?.scenes || []).filter((s) => !s.veoStatus);
-    for (const sc of pending) {
-      handleGenerateScene(msgId, sc.sceneNumber);
-      // Small stagger so the burst of requests doesn't hit the API all at once.
-      await new Promise((resolve) => setTimeout(resolve, 400));
+    for (let i = 0; i < pending.length; i++) {
+      handleGenerateScene(msgId, pending[i].sceneNumber);
+      // Google's Veo Lite quota on Tier 1 is 2 requests/minute — firing kickoffs
+      // back-to-back blows past that instantly (works fine one at a time because
+      // manual clicks are naturally spaced out). ~32s keeps any rolling 60s
+      // window to at most 2 requests. Skip the wait after the last one.
+      if (i < pending.length - 1) await new Promise((resolve) => setTimeout(resolve, 32000));
     }
   }
 
@@ -1181,12 +1184,17 @@ function StoryboardResult({
           {isGeneratingAll ? (
             <>
               <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-              <span>Memulai semua klip...</span>
+              <span>Memulai klip satu-satu (~{Math.ceil((pendingCount * 32) / 60)} menit)...</span>
             </>
           ) : (
             <span>🎬✨ Generate Semua Klip ({pendingCount}) — ${pendingCost.toFixed(2)}</span>
           )}
         </button>
+      )}
+      {pendingCount > 1 && (
+        <p className="text-[10px] text-slate-500 -mt-1.5">
+          Klip dimulai satu-satu dengan jeda ~30 detik (batas rate-limit Google untuk Veo), bukan langsung bareng — supaya nggak kena error 429.
+        </p>
       )}
 
       <div className="space-y-2">

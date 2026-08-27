@@ -130,6 +130,7 @@ export function enqueueVeoJob(params: {
 
 const MAX_ATTEMPTS = 3; // 1 initial + 2 automatic retries
 const RETRY_DELAY_MS = 8_000;
+const RATE_LIMIT_RETRY_DELAY_MS = 65_000; // Veo's RPM window is 60s — wait it out, then retry
 
 // Google's Veo backend intermittently returns a generic "internal server
 // issue" (its own message literally says "please try again in a few
@@ -140,6 +141,15 @@ const RETRY_DELAY_MS = 8_000;
 // retry, so those are NOT retried — only the transient message is.
 function isRetryableError(message: string): boolean {
   return /internal server issue|please try again/i.test(message);
+}
+
+// Veo's free/Tier-1 quota is tight per request-frequency (e.g. 2 requests/min,
+// 10/day for Veo Lite) — a burst (several clips generated close together)
+// trips this even with plenty of spend remaining. A short wait for the
+// per-minute window to roll over often succeeds; a genuinely exhausted daily
+// cap won't, but the extra attempt is cheap either way.
+function isRateLimitError(message: string): boolean {
+  return /RESOURCE_EXHAUSTED|429|exceeded your current quota/i.test(message);
 }
 
 // Veo doesn't always hit the exact requested duration (e.g. asked for 6s,
@@ -217,10 +227,18 @@ async function runJob(job: VeoJobState) {
         break;
       } catch (err: any) {
         lastErr = err;
-        const retryable = isRetryableError(err?.message || "");
-        console.warn(`[veoQueue] Attempt ${attempt}/${MAX_ATTEMPTS} failed for ${job.jobId}${retryable ? ", retrying..." : " (not retryable)"}:`, err?.message);
-        if (!retryable || attempt === MAX_ATTEMPTS) throw err;
-        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+        const msg = err?.message || "";
+        const rateLimited = isRateLimitError(msg);
+        const retryable = rateLimited || isRetryableError(msg);
+        const delay = rateLimited ? RATE_LIMIT_RETRY_DELAY_MS : RETRY_DELAY_MS;
+        console.warn(`[veoQueue] Attempt ${attempt}/${MAX_ATTEMPTS} failed for ${job.jobId}${retryable ? `, retrying in ${delay / 1000}s...` : " (not retryable)"}:`, msg);
+        if (!retryable || attempt === MAX_ATTEMPTS) {
+          if (rateLimited) {
+            throw new Error("Kena rate limit Google (request Veo terlalu sering dalam waktu singkat — Tier 1 cuma bolehin beberapa request per menit/hari). Tunggu 1-2 menit lalu coba lagi, atau cek kuota di ai.dev/rate-limit.");
+          }
+          throw err;
+        }
+        await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
     if (!generated) throw lastErr || new Error("Gagal generate video.");
