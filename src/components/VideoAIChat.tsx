@@ -27,6 +27,42 @@ interface Scene {
   veoStatus?: "generating" | "done" | "error";
   veoError?: string | null;
   videoUrl?: string | null;
+  // Present when this scene comes from the image-upload flow — Veo animates
+  // FROM this photo (image-to-video) instead of imagining it from text alone.
+  sourceImageBase64?: string;
+  sourceImageMimeType?: string;
+}
+
+interface UploadedRefImage {
+  id: string;
+  dataUrl: string;
+  base64: string;
+  mimeType: string;
+  name: string;
+}
+
+interface StoryboardShot {
+  shotNumber: number;
+  shotType: string;
+  cameraAngle: string;
+  action: string;
+  lighting: string;
+  mood: string;
+  imageUrl: string | null;
+  imageBase64: string | null;
+  imageMimeType: string | null;
+  error?: string;
+}
+
+interface ImageStoryboardData {
+  videoTitle: string;
+  consistencyProfile: { subject: string; visualStyle: string };
+  shots: StoryboardShot[];
+}
+
+interface ClarifyingQuestion {
+  imageIndex: number;
+  question: string;
 }
 
 interface ConsistencyProfile {
@@ -75,7 +111,18 @@ const CUSTOM_OPTION = "Lainnya, aku tulis sendiri";
 interface ChatMsg {
   id: string;
   sender: "ai" | "user";
-  kind: "text" | "loading" | "keywords-concepts" | "quick-replies" | "storyboard-id" | "storyboard" | "scenes-generate";
+  kind:
+    | "text"
+    | "loading"
+    | "keywords-concepts"
+    | "quick-replies"
+    | "storyboard-id"
+    | "storyboard"
+    | "scenes-generate"
+    | "user-images"
+    | "image-choice"
+    | "image-storyboard-grid"
+    | "image-clarify";
   text?: string;
   keywords?: string[];
   concepts?: Concept[];
@@ -84,10 +131,47 @@ interface ChatMsg {
   answered?: boolean;
   storyboardIndo?: StoryboardIndoData;
   refinedData?: RefinedData;
+  images?: UploadedRefImage[];
+  imageStoryboard?: ImageStoryboardData;
+  clarifyingQuestions?: ClarifyingQuestion[];
 }
 
 let idCounter = 0;
 const nextId = () => `m${++idCounter}_${Date.now()}`;
+
+const MAX_REF_IMAGES = 5;
+
+// Downscales+recompresses an uploaded image client-side before it goes into a
+// JSON request body — keeps payloads small (5 uploads x multi-MB phone
+// photos would otherwise be a multi-MB POST) and avoids proxy body-size limits.
+function compressImageFile(file: File, maxDim = 1280, quality = 0.85): Promise<{ dataUrl: string; base64: string; mimeType: string }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Gagal membaca file gambar."));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Gagal memuat gambar."));
+      img.onload = () => {
+        let { width, height } = img;
+        if (width > maxDim || height > maxDim) {
+          const scale = maxDim / Math.max(width, height);
+          width = Math.round(width * scale);
+          height = Math.round(height * scale);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return reject(new Error("Canvas tidak didukung."));
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL("image/jpeg", quality);
+        resolve({ dataUrl, base64: dataUrl.split(",")[1], mimeType: "image/jpeg" });
+      };
+      img.src = reader.result as string;
+    };
+    reader.readAsDataURL(file);
+  });
+}
 
 interface VideoAIChatProps {
   apiKey?: string;
@@ -104,7 +188,13 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
     },
   ]);
   const [input, setInput] = useState("");
-  const [phase, setPhase] = useState<"brief" | "concepts" | "qa" | "qa-custom" | "storyboard" | "done">("brief");
+  const [phase, setPhase] = useState<
+    "brief" | "concepts" | "qa" | "qa-custom" | "storyboard" | "done" | "image-choice" | "image-clarify"
+  >("brief");
+  const [pendingImages, setPendingImages] = useState<UploadedRefImage[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const pendingImageScenesRef = useRef<{ images: Array<{ base64: string; mimeType: string }> } | null>(null);
+  const clarifyAnswersRef = useRef<Record<number, string>>({});
   const [qaSteps, setQaSteps] = useState<QAStep[]>([]);
   const [qaIndex, setQaIndex] = useState(0);
   const [qaAnswers, setQaAnswers] = useState<Record<string, string>>({});
@@ -171,6 +261,162 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
       removeMsg(loadingId);
       pushMsg({ sender: "ai", kind: "text", text: `Maaf, gagal riset ide: ${err.message}` });
     }
+  }
+
+  // ─── Image upload flow ────────────────────────────────────────────────────
+  async function handleImageFilesSelected(files: FileList | null) {
+    if (!files || files.length === 0) return;
+    const room = MAX_REF_IMAGES - pendingImages.length;
+    if (room <= 0) {
+      pushMsg({ sender: "ai", kind: "text", text: `Maksimal ${MAX_REF_IMAGES} foto ya, udah penuh nih.` });
+      return;
+    }
+    const toAdd = Array.from(files).slice(0, room);
+    try {
+      const compressed = await Promise.all(toAdd.map((f) => compressImageFile(f)));
+      const newImages: UploadedRefImage[] = compressed.map((c, i) => ({
+        id: `img_${Date.now()}_${i}`,
+        dataUrl: c.dataUrl,
+        base64: c.base64,
+        mimeType: c.mimeType,
+        name: toAdd[i].name,
+      }));
+      setPendingImages((prev) => [...prev, ...newImages]);
+    } catch (err: any) {
+      pushMsg({ sender: "ai", kind: "text", text: `Gagal memproses gambar: ${err.message}` });
+    }
+  }
+
+  function handleRemovePendingImage(id: string) {
+    setPendingImages((prev) => prev.filter((img) => img.id !== id));
+  }
+
+  async function handleSendImages() {
+    if (pendingImages.length === 0) return;
+    const caption = input.trim();
+    setInput("");
+    const images = pendingImages;
+    setPendingImages([]);
+    setBriefText(caption);
+
+    pushMsg({ sender: "user", kind: "user-images", text: caption, images });
+
+    if (images.length > 1) {
+      pushMsg({
+        sender: "ai",
+        kind: "image-choice",
+        text: `Aku lihat kamu upload ${images.length} foto. Mau aku buatin storyboard dulu (6-8 shot baru yang photorealistic, konsisten sama salah satu foto ini), atau langsung generate video pakai tiap foto apa adanya (${images.length} klip, 1 klip per foto)?`,
+        images,
+      });
+    } else {
+      pushMsg({
+        sender: "ai",
+        kind: "image-choice",
+        text: "Mau aku buatin storyboard dulu dari foto ini (6-8 shot baru yang photorealistic), atau langsung generate video pakai foto ini apa adanya?",
+        images,
+      });
+    }
+    setPhase("image-choice");
+  }
+
+  async function handleImageChoiceStoryboard(msgId: string, chosenImage: UploadedRefImage) {
+    updateMsg(msgId, { answered: true });
+    pushMsg({ sender: "user", kind: "text", text: `Buatkan storyboard dari: ${chosenImage.name}` });
+
+    const loadingId = pushLoading("Menganalisis foto & menyusun 6-8 shot storyboard, lalu generate gambarnya...");
+    try {
+      const data = await callApi("/api/video-ai/image-storyboard", {
+        imageBase64: chosenImage.base64,
+        imageMimeType: chosenImage.mimeType,
+        userContext: briefText,
+        apiKey,
+      });
+      removeMsg(loadingId);
+      pushMsg({
+        sender: "ai",
+        kind: "image-storyboard-grid",
+        imageStoryboard: data.storyboard,
+        text: "Nih storyboard-nya! Cek dulu tiap shot-nya, kalau udah oke tinggal lanjut ke generate video.",
+      });
+    } catch (err: any) {
+      removeMsg(loadingId);
+      pushMsg({ sender: "ai", kind: "text", text: `Maaf, gagal bikin storyboard: ${err.message}` });
+      setPhase("image-choice");
+    }
+  }
+
+  async function handleImageChoiceDirect(msgId: string, images: UploadedRefImage[]) {
+    updateMsg(msgId, { answered: true });
+    pushMsg({ sender: "user", kind: "text", text: "Langsung generate aja, pakai foto apa adanya." });
+    await runImageScenes(
+      images.map((img) => ({ base64: img.base64, mimeType: img.mimeType })),
+      {}
+    );
+  }
+
+  async function handleConfirmImageStoryboard(storyboard: ImageStoryboardData) {
+    const usable = storyboard.shots.filter((s) => s.imageBase64);
+    if (usable.length === 0) {
+      pushMsg({ sender: "ai", kind: "text", text: "Maaf, semua shot gagal digenerate gambarnya — coba lagi dari awal ya." });
+      return;
+    }
+    await runImageScenes(
+      usable.map((s) => ({ base64: s.imageBase64!, mimeType: s.imageMimeType || "image/jpeg" })),
+      {}
+    );
+  }
+
+  async function runImageScenes(images: Array<{ base64: string; mimeType: string }>, imageHints: Record<string, string>) {
+    const loadingId = pushLoading("Menganalisis tiap gambar & menulis naskah voice over...");
+    try {
+      const data = await callApi("/api/video-ai/image-scenes", {
+        images,
+        userContext: briefText,
+        imageHints,
+        apiKey,
+      });
+      removeMsg(loadingId);
+
+      if (data.clarifyingQuestions && data.clarifyingQuestions.length > 0 && Object.keys(imageHints).length === 0) {
+        // Only ask once — store the pending refinedData + images so we can
+        // finalize immediately after the user answers (or skips).
+        pendingImageScenesRef.current = { images };
+        pushMsg({
+          sender: "ai",
+          kind: "image-clarify",
+          clarifyingQuestions: data.clarifyingQuestions,
+          text: "Sebelum aku tuliskan naskahnya, ada beberapa gambar yang kurang jelas — boleh dijelasin dikit?",
+        });
+        setPhase("image-clarify");
+        return;
+      }
+
+      pushMsg({
+        sender: "ai",
+        kind: "storyboard",
+        refinedData: data.refinedData,
+        text: "Nih hasilnya! Naskah & prompt video siap generate, konsisten sama foto yang kamu kasih.",
+      });
+      setPhase("done");
+    } catch (err: any) {
+      removeMsg(loadingId);
+      pushMsg({ sender: "ai", kind: "text", text: `Maaf, gagal menyusun naskah: ${err.message}` });
+    }
+  }
+
+  async function handleImageClarifySubmit(msgId: string, questions: ClarifyingQuestion[]) {
+    updateMsg(msgId, { answered: true });
+    const pending = pendingImageScenesRef.current;
+    if (!pending) return;
+    const hints: Record<string, string> = {};
+    questions.forEach((q) => {
+      const val = clarifyAnswersRef.current[q.imageIndex];
+      if (val && val.trim()) hints[String(q.imageIndex)] = val.trim();
+    });
+    pushMsg({ sender: "user", kind: "text", text: Object.keys(hints).length > 0 ? "Oke, ini penjelasannya." : "(Skip, langsung aja)" });
+    clarifyAnswersRef.current = {};
+    setPhase("done");
+    await runImageScenes(pending.images, hints);
   }
 
   // ─── Step 2: pick concept → fetch contextual Q&A ─────────────────────────
@@ -382,7 +628,8 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
   }
 
   function handleSend() {
-    if (phase === "brief") handleSendBrief();
+    if (phase === "brief" && pendingImages.length > 0) handleSendImages();
+    else if (phase === "brief") handleSendBrief();
     else if (phase === "qa-custom") handleCustomQASubmit();
   }
 
@@ -417,6 +664,11 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
             onGenerateScene={handleGenerateScene}
             onGenerateAll={handleGenerateAllScenes}
             onSendToKlipAI={onSendToKlipAI}
+            onImageChoiceStoryboard={handleImageChoiceStoryboard}
+            onImageChoiceDirect={handleImageChoiceDirect}
+            onConfirmImageStoryboard={handleConfirmImageStoryboard}
+            onClarifyAnswerChange={(idx, val) => { clarifyAnswersRef.current[idx] = val; }}
+            onImageClarifySubmit={handleImageClarifySubmit}
           />
         ))}
         <div ref={endRef} />
@@ -424,35 +676,81 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
 
       {/* Input */}
       <div className="p-3 border-t border-slate-800 bg-slate-900">
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            handleSend();
-          }}
-          className="flex items-center gap-2 max-w-3xl mx-auto"
-        >
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            disabled={phase !== "brief" && phase !== "qa-custom"}
-            placeholder={
-              phase === "brief"
-                ? "Contoh: kerja remote dari kafe, buat YouTube Shorts, target pekerja muda 22-30 tahun..."
-                : phase === "qa-custom"
-                ? "Tulis jawabanmu sendiri..."
-                : "Klik salah satu opsi di atas untuk lanjut"
-            }
-            className="flex-1 text-sm p-3 rounded-2xl bg-slate-950 border border-slate-700 text-white placeholder-slate-500 focus:border-purple-500 outline-none disabled:opacity-50"
-          />
-          <button
-            type="submit"
-            disabled={(phase !== "brief" && phase !== "qa-custom") || !input.trim()}
-            className="p-3 bg-gradient-to-r from-purple-600 to-indigo-600 disabled:opacity-40 text-white rounded-2xl shadow"
+        <div className="max-w-3xl mx-auto">
+          {pendingImages.length > 0 && (
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
+              {pendingImages.map((img) => (
+                <div key={img.id} className="relative">
+                  <img src={img.dataUrl} alt={img.name} className="w-14 h-14 object-cover rounded-lg border border-slate-700" />
+                  <button
+                    onClick={() => handleRemovePendingImage(img.id)}
+                    className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-red-600 text-white text-[9px] font-black flex items-center justify-center"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+              <span className="text-[10px] text-slate-500">{pendingImages.length}/{MAX_REF_IMAGES}</span>
+            </div>
+          )}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSend();
+            }}
+            className="flex items-center gap-2"
           >
-            <Send className="w-4 h-4" />
-          </button>
-        </form>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              hidden
+              onChange={(e) => {
+                handleImageFilesSelected(e.target.files);
+                e.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={phase !== "brief" || pendingImages.length >= MAX_REF_IMAGES}
+              title="Upload foto referensi (maks 5)"
+              className="p-3 rounded-2xl bg-slate-950 border border-slate-700 text-slate-300 hover:border-purple-500 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed text-lg font-black leading-none w-11 h-11 flex items-center justify-center"
+            >
+              +
+            </button>
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              disabled={phase !== "brief" && phase !== "qa-custom" && phase !== "image-clarify"}
+              placeholder={
+                phase === "brief" && pendingImages.length > 0
+                  ? "Tambahin konteks (opsional), lalu kirim..."
+                  : phase === "brief"
+                  ? "Contoh: kerja remote dari kafe, buat YouTube Shorts, target pekerja muda 22-30 tahun... (atau upload foto pakai tombol +)"
+                  : phase === "qa-custom"
+                  ? "Tulis jawabanmu sendiri..."
+                  : phase === "image-clarify"
+                  ? "Jawab pertanyaan di atas, lalu klik Lanjut"
+                  : "Klik salah satu opsi di atas untuk lanjut"
+              }
+              className="flex-1 text-sm p-3 rounded-2xl bg-slate-950 border border-slate-700 text-white placeholder-slate-500 focus:border-purple-500 outline-none disabled:opacity-50"
+            />
+            <button
+              type="submit"
+              disabled={
+                (phase !== "brief" && phase !== "qa-custom") ||
+                (phase === "brief" && pendingImages.length === 0 && !input.trim()) ||
+                (phase === "qa-custom" && !input.trim())
+              }
+              className="p-3 bg-gradient-to-r from-purple-600 to-indigo-600 disabled:opacity-40 text-white rounded-2xl shadow"
+            >
+              <Send className="w-4 h-4" />
+            </button>
+          </form>
+        </div>
       </div>
     </div>
   );
@@ -470,6 +768,11 @@ function ChatBubble({
   onGenerateScene,
   onGenerateAll,
   onSendToKlipAI,
+  onImageChoiceStoryboard,
+  onImageChoiceDirect,
+  onConfirmImageStoryboard,
+  onClarifyAnswerChange,
+  onImageClarifySubmit,
 }: {
   msg: ChatMsg;
   quality: VeoQuality;
@@ -481,6 +784,11 @@ function ChatBubble({
   onGenerateScene: (msgId: string, sceneNumber: number) => void;
   onGenerateAll: (msgId: string) => void;
   onSendToKlipAI?: (projectData: any) => void | Promise<void>;
+  onImageChoiceStoryboard: (msgId: string, image: UploadedRefImage) => void;
+  onImageChoiceDirect: (msgId: string, images: UploadedRefImage[]) => void;
+  onConfirmImageStoryboard: (storyboard: ImageStoryboardData) => void;
+  onClarifyAnswerChange: (imageIndex: number, value: string) => void;
+  onImageClarifySubmit: (msgId: string, questions: ClarifyingQuestion[]) => void;
 }) {
   const isUser = msg.sender === "user";
 
@@ -562,6 +870,88 @@ function ChatBubble({
         {msg.kind === "storyboard" && msg.refinedData && (
           <StoryboardResult data={msg.refinedData} msgId={msg.id} quality={quality} setQuality={setQuality} onGenerateScene={onGenerateScene} onGenerateAll={onGenerateAll} onSendToKlipAI={onSendToKlipAI} />
         )}
+
+        {msg.kind === "user-images" && msg.images && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {msg.images.map((img) => (
+              <img key={img.id} src={img.dataUrl} alt={img.name} className="w-16 h-16 object-cover rounded-lg border border-white/20" />
+            ))}
+          </div>
+        )}
+
+        {msg.kind === "image-choice" && msg.images && (
+          <div className="mt-2.5 space-y-2">
+            {msg.images.length > 1 ? (
+              <>
+                <p className="text-[10px] text-slate-400">Pilih 1 foto buat dijadikan storyboard:</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {msg.images.map((img) => (
+                    <button
+                      key={img.id}
+                      disabled={msg.answered}
+                      onClick={() => onImageChoiceStoryboard(msg.id, img)}
+                      className="disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <img src={img.dataUrl} alt={img.name} className="w-16 h-16 object-cover rounded-lg border border-slate-700 hover:border-purple-500 transition-all" />
+                    </button>
+                  ))}
+                </div>
+                <button
+                  disabled={msg.answered}
+                  onClick={() => onImageChoiceDirect(msg.id, msg.images!)}
+                  className="text-xs font-bold px-3 py-1.5 rounded-xl border border-slate-700 bg-slate-950 text-slate-200 hover:border-purple-500 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Nggak usah, langsung generate {msg.images.length} klip apa adanya
+                </button>
+              </>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  disabled={msg.answered}
+                  onClick={() => onImageChoiceStoryboard(msg.id, msg.images![0])}
+                  className="text-xs font-bold px-3 py-1.5 rounded-xl border border-slate-700 bg-slate-950 text-slate-200 hover:border-purple-500 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Ya, buatkan storyboard
+                </button>
+                <button
+                  disabled={msg.answered}
+                  onClick={() => onImageChoiceDirect(msg.id, msg.images!)}
+                  className="text-xs font-bold px-3 py-1.5 rounded-xl border border-slate-700 bg-slate-950 text-slate-200 hover:border-purple-500 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  Nggak usah, langsung generate
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {msg.kind === "image-storyboard-grid" && msg.imageStoryboard && (
+          <ImageStoryboardGrid data={msg.imageStoryboard} onConfirm={() => onConfirmImageStoryboard(msg.imageStoryboard!)} />
+        )}
+
+        {msg.kind === "image-clarify" && msg.clarifyingQuestions && (
+          <div className="mt-2.5 space-y-2">
+            {msg.clarifyingQuestions.map((q) => (
+              <div key={q.imageIndex} className="space-y-1">
+                <p className="text-xs text-slate-300">{q.question}</p>
+                <input
+                  type="text"
+                  disabled={msg.answered}
+                  onChange={(e) => onClarifyAnswerChange(q.imageIndex, e.target.value)}
+                  placeholder="Jawabanmu (boleh dikosongkan)"
+                  className="w-full text-xs p-2 rounded-lg bg-slate-950 border border-slate-700 text-white placeholder-slate-500 focus:border-purple-500 outline-none disabled:opacity-50"
+                />
+              </div>
+            ))}
+            <button
+              disabled={msg.answered}
+              onClick={() => onImageClarifySubmit(msg.id, msg.clarifyingQuestions!)}
+              className="text-xs font-black px-3 py-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 text-white disabled:opacity-40"
+            >
+              Lanjut →
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -580,6 +970,47 @@ function ConceptCard({ concept, onClick, rare }: { concept: Concept; onClick: ()
       <p className="text-xs text-slate-400 mt-1">{concept.summary}</p>
       <p className="text-xs text-purple-300 italic mt-1.5">"{concept.hook}"</p>
     </button>
+  );
+}
+
+function ImageStoryboardGrid({ data, onConfirm }: { data: ImageStoryboardData; onConfirm: () => void }) {
+  const [confirmed, setConfirmed] = useState(false);
+  const okShots = data.shots.filter((s) => s.imageUrl);
+
+  return (
+    <div className="mt-3 space-y-3">
+      <p className="text-sm font-black text-white">{data.videoTitle}</p>
+      {data.consistencyProfile?.subject && (
+        <div className="text-xs bg-purple-950/20 rounded-xl p-3 border border-purple-500/30">
+          <span className="font-black text-purple-300">🎯 Subjek konsisten: </span>{data.consistencyProfile.subject}
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 gap-2">
+        {data.shots.map((shot) => (
+          <div key={shot.shotNumber} className="rounded-xl border border-slate-800 bg-slate-950/60 overflow-hidden">
+            {shot.imageUrl ? (
+              <img src={shot.imageUrl} alt={`Shot ${shot.shotNumber}`} className="w-full aspect-[3/4] object-cover" />
+            ) : (
+              <div className="w-full aspect-[3/4] flex items-center justify-center text-[10px] text-red-400 p-2 text-center">{shot.error || "Gagal generate"}</div>
+            )}
+            <div className="p-2 space-y-0.5">
+              <p className="text-[10px] font-black text-purple-300">Shot {shot.shotNumber} · {shot.shotType}</p>
+              <p className="text-[10px] text-slate-400">Aksi: {shot.action}</p>
+              <p className="text-[10px] text-slate-500">{shot.cameraAngle} · {shot.lighting} · {shot.mood}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <button
+        onClick={() => { setConfirmed(true); onConfirm(); }}
+        disabled={confirmed || okShots.length === 0}
+        className="w-full text-xs font-black px-3 py-2.5 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 text-white disabled:opacity-50"
+      >
+        {confirmed ? "Lagi nulis naskah..." : `✅ Lanjut ke Video (${okShots.length} klip) →`}
+      </button>
+    </div>
   );
 }
 
