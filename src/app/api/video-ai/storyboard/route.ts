@@ -94,7 +94,7 @@ Aturan WAJIB:
 7. "startSec" dan "endSec" HARUS kumulatif akurat: baris pertama startSec=0, baris berikutnya startSec = endSec baris sebelumnya, dan endSec = startSec + durationSec.
 8. PALING PENTING: panjang "narration" tiap baris harus PAS kalau diucapkan dalam durationSec baris itu (kecepatan bicara natural ~2.5-3 kata/detik) — misal baris 6 detik idealnya sekitar 15-18 kata. JANGAN menulis narasi yang lebih panjang dari itu, karena nanti suaranya akan kepotong di video hasil generate. Lebih baik narasi sedikit lebih pendek/ada jeda natural daripada kepanjangan.`;
 
-    const candidateModels = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-flash-latest"];
+    const candidateModels = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-3-flash-preview"];
     let responseText = "";
     let lastErr: any = null;
 

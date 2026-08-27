@@ -73,7 +73,7 @@ Aturan:
 3. Shot-shot ini akan digenerate ulang jadi foto baru yang photorealistic (bukan ilustrasi), jadi imagePrompt harus menggambarkan momen/aksi nyata yang bisa difoto.
 4. Kalau foto referensi menunjukkan tempat/objek yang sangat spesifik & personal (misal restoran/toko milik user), tetap gambarkan shot-shot yang realistis konsisten dengan tempat itu — jangan ganti jadi tempat generik.`;
 
-    const candidateModels = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.5-pro"];
+    const candidateModels = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-3-flash-preview"];
     let breakdownText = "";
     let lastErr: any = null;
     for (const mName of candidateModels) {
@@ -84,7 +84,10 @@ Aturan:
           config: { temperature: 0.7, responseMimeType: "application/json", responseJsonSchema: RESPONSE_SCHEMA },
         });
         if (response?.text) { breakdownText = response.text; break; }
-      } catch (err) { lastErr = err; }
+      } catch (err: any) {
+        console.warn(`[image-storyboard] breakdown failed on ${mName}:`, err?.message?.slice(0, 200));
+        lastErr = err;
+      }
     }
     if (!breakdownText) throw lastErr || new Error("Gagal menganalisis foto referensi.");
 

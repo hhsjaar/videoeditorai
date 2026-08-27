@@ -58,7 +58,7 @@ Aturan:
 3. Variasikan kalimat tanya — jangan selalu "Karakter utamanya siapa?" / "Gaya visualnya mau ke mana?" / "Narasinya disampaikan gimana?" seperti template baku. Sesuaikan pertanyaan dengan topik spesifik brief ini.
 4. Jangan tanya hal yang jawabannya sudah jelas dari brief/konsep di atas.`;
 
-    const candidateModels = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-flash-latest"];
+    const candidateModels = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-3-flash-preview"];
     let responseText = "";
     let lastErr: any = null;
 

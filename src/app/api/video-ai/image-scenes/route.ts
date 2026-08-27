@@ -69,7 +69,7 @@ Tugas:
 4. "duration" tiap scene HARUS 4, 6, atau 8 detik saja.`,
     });
 
-    const candidateModels = ["gemini-2.5-flash", "gemini-flash-latest", "gemini-2.5-pro"];
+    const candidateModels = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-3-flash-preview"];
     let responseText = "";
     let lastErr: any = null;
     for (const mName of candidateModels) {
@@ -80,7 +80,10 @@ Tugas:
           config: { temperature: 0.6, responseMimeType: "application/json", responseJsonSchema: RESPONSE_SCHEMA },
         });
         if (response?.text) { responseText = response.text; break; }
-      } catch (err) { lastErr = err; }
+      } catch (err: any) {
+        console.warn(`[image-scenes] failed on ${mName}:`, err?.message?.slice(0, 200));
+        lastErr = err;
+      }
     }
     if (!responseText) throw lastErr || new Error("Gagal menganalisis gambar.");
 

@@ -78,7 +78,7 @@ Pilihan voice yang tersedia:
 Pilihan BGM yang tersedia: bsl1, bsl2, bsl3, bsl4, bsl5, bsl6, bsl7, bsl8, bsl9, bsl10.
 Pastikan seluruh konten berbahasa Indonesia yang alami, menarik, dan sesuai dengan tren video modern — bukan bahasa iklan yang kaku.`;
 
-    const candidateModels = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-flash-latest"];
+    const candidateModels = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-3-flash-preview"];
     let responseText = "";
     let lastErr: any = null;
 

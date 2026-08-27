@@ -87,7 +87,7 @@ Aturan WAJIB untuk tiap "visualPrompt":
 8. "duration" harus salah satu dari 4, 6, atau 8 detik — pilih yang paling dekat dengan durasi baris storyboard sumbernya.
 9. Urutan "scenes" HARUS sama dengan urutan baris storyboard di atas, sceneNumber mulai dari 1.`;
 
-    const candidateModels = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-flash-latest"];
+    const candidateModels = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-3-flash-preview"];
     let responseText = "";
     let lastErr: any = null;
 
