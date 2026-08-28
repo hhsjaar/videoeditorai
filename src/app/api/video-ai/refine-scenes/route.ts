@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
+import { CINEMATOGRAPHY_RULES } from "@/lib/videoPromptCraft";
 
 const SCENE_SCHEMA = {
   type: "object",
@@ -9,7 +10,7 @@ const SCENE_SCHEMA = {
     visualPrompt: {
       type: "string",
       description:
-        "Prompt video Bahasa Inggris, ditulis MENGALIR dalam satu paragraf (bukan daftar/bullet), mengikuti urutan: [subject + detailed description] + [specific action] + [location & time] + [camera movement] + [lighting & mood] + [visual style] + [audio: dialogue/ambience/sound effects]. Deskriptif seperti menceritakan apa yang terlihat, bukan perintah.",
+        "Prompt video Bahasa Inggris, ditulis MENGALIR dalam satu paragraf (bukan daftar/bullet), mengikuti urutan: [subject + detailed description] + [specific action + EXPLICIT staging/blocking, arah hadap & posisi elemen lain relatif ke subjek] + [location & time] + [camera movement DENGAN tujuan naratif jelas, bukan cuma nama gerakan] + [lighting & mood] + [visual style] + [audio: dialogue/ambience/sound effects]. Deskriptif seperti menceritakan apa yang terlihat, bukan perintah.",
     },
     voiceoverText: { type: "string", description: "Teks voice over Bahasa Indonesia natural, komunikatif, pas dengan durasi — SAMA PERSIS dengan narasi baris storyboard yang jadi sumbernya" },
     cameraMotion: { type: "string", enum: ["zoom-in", "zoom-out", "pan-left", "pan-right", "slow-tilt", "dolly-forward"] },
@@ -85,7 +86,10 @@ Aturan WAJIB untuk tiap "visualPrompt":
 6. Jangan pakai nama orang asli/tokoh terkenal.
 7. "voiceoverText" HARUS sama persis dengan narasi baris storyboard sumbernya (jangan diubah).
 8. "duration" harus salah satu dari 4, 6, atau 8 detik — pilih yang paling dekat dengan durasi baris storyboard sumbernya.
-9. Urutan "scenes" HARUS sama dengan urutan baris storyboard di atas, sceneNumber mulai dari 1.`;
+9. Urutan "scenes" HARUS sama dengan urutan baris storyboard di atas, sceneNumber mulai dari 1.
+
+Aturan sinematografi tambahan (WAJIB, ini yang paling sering bikin hasil video AI kelihatan "kosong" secara emosional kalau dilewatkan):
+${CINEMATOGRAPHY_RULES}`;
 
     const candidateModels = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-3-flash-preview"];
     let responseText = "";

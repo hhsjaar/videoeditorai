@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
+import { CINEMATOGRAPHY_RULES } from "@/lib/videoPromptCraft";
 
 const SCENE_SCHEMA = {
   type: "object",
@@ -67,7 +68,10 @@ Tugas:
 2. Kalau digabung urut, seluruh narasi VO harus mengalir jadi satu naskah utuh dengan hook di awal dan penutup yang pas di akhir — bukan potongan-potongan lepas.
 3. WAJIB, PALING PENTING: video engine ini nggak punya track audio terpisah — SATU-SATUNYA cara VO kedengeran di videonya adalah dengan mengutip PERSIS teks voiceoverText scene itu di dalam kalimat audio pada "visualPrompt" (bagian akhir, format "...and a calm Indonesian voiceover saying, \"<voiceoverText verbatim>\""). Kalau kutipan ini kelewat, videonya jadi BISU tanpa VO sama sekali — jangan sampai lupa di scene manapun.
 4. Kalau ada gambar yang isinya kurang jelas/ambigu (susah dipastikan itu gambar apa), tambahkan entry di "clarifyingQuestions" untuk index gambar itu — TAPI tetap isi scene dengan best-effort guess juga (jangan dikosongkan).
-5. "duration" tiap scene HARUS 4, 6, atau 8 detik saja.`,
+5. "duration" tiap scene HARUS 4, 6, atau 8 detik saja.
+
+Aturan sinematografi tambahan buat bagian motion/aksi di "visualPrompt" (WAJIB, ini yang paling sering bikin hasil video AI kelihatan "kosong" secara emosional kalau dilewatkan — komposisi statisnya sudah dari foto, tapi ARAH GERAK dan APA YANG DIUNGKAP kamera tetap harus jelas):
+${CINEMATOGRAPHY_RULES}`,
     });
 
     const candidateModels = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-3-flash-preview"];
