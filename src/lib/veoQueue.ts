@@ -50,6 +50,12 @@ export interface VeoJobState {
   // text alone, which matters for real/specific reference photos.
   imageBytes: string | null;
   imageMimeType: string | null;
+  // Kling (fal.ai) has no native audio at all — unlike Veo, which speaks the
+  // dialogue baked into `prompt` itself. For Kling jobs we generate this
+  // narration separately via Gemini TTS and mux it onto the silent clip, so
+  // the end result still matches Veo's "one clip, audio included" contract.
+  voiceoverText: string | null;
+  voiceName: string | null;
   operationName: string | null;
   videoUrl: string | null;
   error: string | null;
@@ -103,6 +109,8 @@ export function enqueueVeoJob(params: {
   aspectRatio: string;
   imageBytes?: string;
   imageMimeType?: string;
+  voiceoverText?: string;
+  voiceName?: string;
 }): VeoJobState {
   const state: VeoJobState = {
     jobId: params.jobId,
@@ -114,6 +122,8 @@ export function enqueueVeoJob(params: {
     aspectRatio: params.aspectRatio,
     imageBytes: params.imageBytes || null,
     imageMimeType: params.imageMimeType || null,
+    voiceoverText: params.voiceoverText || null,
+    voiceName: params.voiceName || null,
     operationName: null,
     videoUrl: null,
     error: null,
@@ -255,7 +265,78 @@ async function attemptGenerateKling(job: VeoJobState, rawPath: string): Promise<
   const res = await fetch(remoteUrl);
   if (!res.ok) throw new Error(`Gagal mengunduh hasil video dari fal.ai (HTTP ${res.status}).`);
   const buffer = Buffer.from(await res.arrayBuffer());
-  await writeFile(rawPath, buffer);
+
+  // Kling has no native audio at all (unlike Veo, which speaks dialogue baked
+  // into the prompt) — generate the Indonesian narration separately via
+  // Gemini TTS and mux it in, so the output still ends up as "one clip, audio
+  // included" just like a Veo clip.
+  if (!job.voiceoverText) {
+    await writeFile(rawPath, buffer);
+    return;
+  }
+
+  const silentPath = rawPath.replace(/\.raw\.mp4$/, ".silent.mp4");
+  await writeFile(silentPath, buffer);
+
+  try {
+    const wavBuffer = await generateTtsWav(job.voiceoverText, job.voiceName || "Zephyr");
+    const wavPath = rawPath.replace(/\.raw\.mp4$/, ".vo.wav");
+    await writeFile(wavPath, wavBuffer);
+
+    const ffmpegBin = await getCachedFfmpeg();
+    if (!ffmpegBin) throw new Error("ffmpeg tidak tersedia untuk menggabungkan audio ke video Kling.");
+
+    // -shortest caps output at whichever stream is shorter — avoids a clip
+    // that visually freezes/loops while narration keeps playing, or audio
+    // cutting off mid-word while the video keeps rolling silently.
+    await execAsync(
+      `"${ffmpegBin}" -y -i "${silentPath}" -i "${wavPath}" -map 0:v:0 -map 1:a:0 -c:v copy -c:a aac -shortest "${rawPath}"`,
+      { timeout: 60000 }
+    );
+    await rm(silentPath, { force: true }).catch(() => {});
+    await rm(wavPath, { force: true }).catch(() => {});
+  } catch (err: any) {
+    console.warn(`[veoQueue] Kling VO mux failed for ${job.jobId}, keeping silent clip:`, err?.message?.slice(0, 200));
+    // Better a silent clip than no clip at all — fall back rather than fail the whole job.
+    await rm(rawPath, { force: true }).catch(() => {});
+    const { rename } = await import("fs/promises");
+    await rename(silentPath, rawPath);
+  }
+}
+
+// Minimal standalone Gemini TTS call (no word-timing analysis needed here,
+// unlike /api/generate-speech — this just needs the raw audio bytes).
+async function generateTtsWav(text: string, voiceName: string): Promise<Buffer> {
+  const response = await genai.models.generateContent({
+    model: "gemini-2.5-flash-preview-tts",
+    contents: `Anda adalah seorang presenter dan voice over profesional Indonesia yang ramah, komunikatif, dan penuh percaya diri. Ucapkan naskah Bahasa Indonesia berikut ini dengan intonasi yang alami, nada bicara yang hangat dan segar, artikulasi jernih, serta tempo bicara yang pas seperti iklan komersial modern.\n\nBacakan naskah berikut ini dengan alami, jelas, dan percaya diri:\n"${text}"`,
+    config: {
+      responseModalities: ["AUDIO"],
+      speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } },
+    },
+  });
+
+  const parts = response.candidates?.[0]?.content?.parts || [];
+  const inline = parts.find((p: any) => p.inlineData?.data)?.inlineData;
+  if (!inline?.data) throw new Error("Gemini TTS tidak mengembalikan audio.");
+
+  const pcm = Buffer.from(inline.data, "base64");
+  // Gemini TTS output: 24kHz, 16-bit, mono PCM — wrap in a WAV header.
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0);
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write("WAVE", 8);
+  header.write("fmt ", 12);
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(24000, 24);
+  header.writeUInt32LE(24000 * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write("data", 36);
+  header.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([header, pcm]);
 }
 
 async function runJob(job: VeoJobState) {

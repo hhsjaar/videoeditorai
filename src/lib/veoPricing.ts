@@ -30,7 +30,7 @@ export const QUALITY_LABELS: Record<VeoQuality, string> = {
   lite: "Veo Lite (termurah)",
   fast: "Veo Fast (lebih cepat)",
   standard: "Veo Standard (kualitas terbaik)",
-  kling: "Kling 2.5 Turbo Pro (fal.ai, limit lebih longgar)",
+  kling: "Kling 2.5 Turbo Pro (fal.ai, limit lebih longgar, VO via TTS terpisah)",
 };
 
 // Google's Veo needs a request-provider distinction so the queue knows which

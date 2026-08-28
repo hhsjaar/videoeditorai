@@ -149,6 +149,11 @@ export async function POST(req: NextRequest) {
           // keeps real places/products faithful instead of hallucinated.
           imageBytes: sc.sourceImageBase64 || undefined,
           imageMimeType: sc.sourceImageMimeType || undefined,
+          // Kling has no native audio — narration gets generated separately
+          // via TTS and muxed in (see veoQueue.ts). Unused for Veo, which
+          // already speaks its dialogue baked into visualPrompt/prompt.
+          voiceoverText: veoQuality === "kling" ? (sc.voiceoverText || undefined) : undefined,
+          voiceName: refinedData.voice || undefined,
         });
       }
 
