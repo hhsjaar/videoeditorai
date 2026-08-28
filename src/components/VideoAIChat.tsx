@@ -119,6 +119,7 @@ interface RefinedData {
   aspectRatio: string;
   voice?: string;
   bgmId?: string;
+  seed?: number;
   scenes: Scene[];
 }
 
@@ -734,6 +735,9 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
             onConfirmImageStoryboard={handleConfirmImageStoryboard}
             onClarifyAnswerChange={(idx, val) => { clarifyAnswersRef.current[idx] = val; }}
             onImageClarifySubmit={handleImageClarifySubmit}
+            apiKey={apiKey}
+            onUseKeyword={(k) => setInput(k)}
+            briefText={briefText}
           />
         ))}
         <div ref={endRef} />
@@ -838,6 +842,9 @@ function ChatBubble({
   onConfirmImageStoryboard,
   onClarifyAnswerChange,
   onImageClarifySubmit,
+  apiKey,
+  onUseKeyword,
+  briefText,
 }: {
   msg: ChatMsg;
   quality: VeoQuality;
@@ -854,6 +861,9 @@ function ChatBubble({
   onConfirmImageStoryboard: (storyboard: ImageStoryboardData) => void;
   onClarifyAnswerChange: (imageIndex: number, value: string) => void;
   onImageClarifySubmit: (msgId: string, questions: ClarifyingQuestion[]) => void;
+  apiKey?: string;
+  onUseKeyword: (keyword: string) => void;
+  briefText: string;
 }) {
   const isUser = msg.sender === "user";
 
@@ -884,11 +894,7 @@ function ChatBubble({
         {msg.kind === "keywords-concepts" && (
           <div className="mt-3 space-y-3">
             {msg.keywords && msg.keywords.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {msg.keywords.map((k, i) => (
-                  <span key={i} className="text-[10px] px-2 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-400">{k}</span>
-                ))}
-              </div>
+              <KeywordExplorer rootKeywords={msg.keywords} originalPrompt={briefText} apiKey={apiKey} onUseKeyword={onUseKeyword} />
             )}
             <div className="space-y-2">
               {(msg.concepts || []).filter((c) => !c.isRareAngle).map((c) => (
@@ -1024,6 +1030,83 @@ function ChatBubble({
       </div>
     </div>
   );
+}
+
+// Recursive keyword drill-down: click a keyword → fetch 10 more related to
+// it, nested indented right below. Each click also prefills the main input
+// with that keyword so the user can hit send at any depth if they just
+// want to use it as-is, without forcing a decision between "explore more"
+// and "use this".
+function KeywordExplorer({
+  rootKeywords,
+  originalPrompt,
+  apiKey,
+  onUseKeyword,
+}: {
+  rootKeywords: string[];
+  originalPrompt: string;
+  apiKey?: string;
+  onUseKeyword: (keyword: string) => void;
+}) {
+  const [childrenMap, setChildrenMap] = useState<Record<string, string[]>>({});
+  const [loadingPath, setLoadingPath] = useState<string | null>(null);
+  const [errorPath, setErrorPath] = useState<string | null>(null);
+
+  async function handleClick(pathArr: string[]) {
+    const keyword = pathArr[pathArr.length - 1];
+    onUseKeyword(keyword);
+
+    const pathKey = pathArr.join(" > ");
+    if (childrenMap[pathKey] || loadingPath === pathKey) return;
+    setLoadingPath(pathKey);
+    setErrorPath(null);
+    try {
+      const res = await fetch("/api/video-ai/related-keywords", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keyword, path: pathArr, originalPrompt, apiKey }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.success === false) throw new Error(data.error || "Gagal memuat kata kunci.");
+      setChildrenMap((prev) => ({ ...prev, [pathKey]: data.keywords || [] }));
+    } catch {
+      setErrorPath(pathKey);
+    } finally {
+      setLoadingPath(null);
+    }
+  }
+
+  function renderLevel(keywords: string[], parentPath: string[]): React.ReactNode {
+    return (
+      <div className="flex flex-wrap gap-1.5">
+        {keywords.map((k) => {
+          const pathArr = [...parentPath, k];
+          const pathKey = pathArr.join(" > ");
+          const isLoading = loadingPath === pathKey;
+          const children = childrenMap[pathKey];
+          const hasError = errorPath === pathKey;
+          return (
+            <div key={pathKey} className="flex flex-col gap-1.5 items-start">
+              <button
+                onClick={() => handleClick(pathArr)}
+                className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-full bg-slate-800 border border-slate-700 text-slate-300 hover:border-purple-500 hover:text-white transition-all disabled:opacity-50"
+                disabled={isLoading}
+              >
+                {k}
+                {isLoading ? <Loader2 className="w-2.5 h-2.5 animate-spin" /> : <span className="text-slate-500">{children ? "▾" : "▸"}</span>}
+              </button>
+              {hasError && <span className="text-[9px] text-red-400 pl-1">Gagal muat, coba klik lagi</span>}
+              {children && children.length > 0 && (
+                <div className="pl-3 border-l border-slate-700 ml-1">{renderLevel(children, pathArr)}</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+
+  return renderLevel(rootKeywords, []);
 }
 
 function ConceptCard({ concept, onClick, rare }: { concept: Concept; onClick: () => void; rare?: boolean }) {

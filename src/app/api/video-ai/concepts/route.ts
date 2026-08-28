@@ -22,7 +22,7 @@ const CONCEPT_SCHEMA = {
 const RESPONSE_SCHEMA = {
   type: "object",
   properties: {
-    keywords: { type: "array", items: { type: "string" }, description: "Kata kunci yang kemungkinan besar dipakai orang Indonesia saat mencari topik ini" },
+    keywords: { type: "array", minItems: 10, maxItems: 10, items: { type: "string" }, description: "TEPAT 10 kata kunci yang kemungkinan besar dipakai orang Indonesia saat mencari topik ini, urut dari yang paling relevan/populer" },
     concepts: { type: "array", minItems: 5, maxItems: 5, items: CONCEPT_SCHEMA, description: "5 angle konten yang lagi relevan" },
     rareConcepts: { type: "array", minItems: 3, maxItems: 3, items: CONCEPT_SCHEMA, description: "3 sudut pandang yang JARANG dipakai kreator lain" },
   },
