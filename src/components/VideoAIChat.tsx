@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
-import { Bot, Send, Loader2, Check, RefreshCw, Sparkles } from "lucide-react";
+import { Bot, Send, Loader2, Check, RefreshCw, Sparkles, Copy } from "lucide-react";
 import { QUALITY_PRICE_PER_SEC, QUALITY_LABELS, type VeoQuality } from "@/lib/veoPricing";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -979,6 +979,39 @@ function ConceptCard({ concept, onClick, rare }: { concept: Concept; onClick: ()
   );
 }
 
+function CopyPromptButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // Clipboard API can be blocked (insecure context, permissions) — fall
+      // back to the old textarea+execCommand trick rather than doing nothing.
+      const ta = document.createElement("textarea");
+      ta.value = text;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch { /* give up silently */ }
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  return (
+    <button
+      onClick={handleCopy}
+      title="Salin prompt"
+      className="absolute top-1.5 right-1.5 p-1.5 rounded-lg bg-slate-800/80 border border-slate-700 text-slate-300 hover:text-white hover:border-purple-500 transition-all"
+    >
+      {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+    </button>
+  );
+}
+
 function ImageStoryboardGrid({ data, onConfirm }: { data: ImageStoryboardData; onConfirm: () => void }) {
   const [confirmed, setConfirmed] = useState(false);
   const okShots = data.shots.filter((s) => s.imageUrl);
@@ -1207,7 +1240,10 @@ function StoryboardResult({
               <span className="text-xs font-black text-purple-300">Klip {sc.sceneNumber} — {sc.duration}s</span>
             </div>
             <p className="text-xs text-slate-400">{sc.voiceoverText}</p>
-            <pre className="text-[10px] text-slate-300 whitespace-pre-wrap bg-slate-900 p-2 rounded-lg border border-slate-800 font-mono">{sc.visualPrompt}</pre>
+            <div className="relative">
+              <pre className="text-[10px] text-slate-300 whitespace-pre-wrap bg-slate-900 p-2 pr-8 rounded-lg border border-slate-800 font-mono">{sc.visualPrompt}</pre>
+              <CopyPromptButton text={sc.visualPrompt} />
+            </div>
 
             {(!sc.veoStatus) && (
               <button
