@@ -572,6 +572,9 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
       if (!res.ok || !data.success) throw new Error(data.error || "Gagal memulai generate video.");
       const jobId = data.data.scenes[0]?.veoJobId;
       if (!jobId) throw new Error("Job ID tidak ditemukan.");
+      // Must be written into state — "Gabungkan & Download" reads scene.veoJobId
+      // to know which files to stitch, and this was the only place it could be set.
+      patchScene(msgId, sceneNumber, { veoJobId: jobId });
       pollScene(msgId, sceneNumber, jobId);
     } catch (err: any) {
       patchScene(msgId, sceneNumber, { veoStatus: "error", veoError: err.message });
