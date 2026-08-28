@@ -19,17 +19,6 @@ function clampToKlingDuration(requested: number): 5 | 10 {
   return (VALID_KLING_DURATIONS.find((v) => v >= requested) ?? 10) as 5 | 10;
 }
 
-// Deterministic fallback seed (fits Veo's int32-ish range) for refinedData
-// that never had an explicit one — same title always hashes to the same
-// number, so scenes fired as separate per-clip requests still share a seed.
-function hashSeed(text: string): number {
-  let h = 0;
-  for (let i = 0; i < text.length; i++) {
-    h = (h * 31 + text.charCodeAt(i)) | 0;
-  }
-  return Math.abs(h) % 2147483647;
-}
-
 export async function POST(req: NextRequest) {
   try {
     const {
@@ -165,12 +154,6 @@ export async function POST(req: NextRequest) {
           // already speaks its dialogue baked into visualPrompt/prompt.
           voiceoverText: veoQuality === "kling" ? (sc.voiceoverText || undefined) : undefined,
           voiceName: refinedData.voice || undefined,
-          // Reused across every scene in this project so Veo's clips actually
-          // look like the same shoot instead of each rolling a fresh random
-          // look — falls back to a deterministic hash of the title so scenes
-          // fired in separate requests (one per clip) still land on the same
-          // seed even for older refinedData that never set one explicitly.
-          seed: typeof refinedData.seed === "number" ? refinedData.seed : hashSeed(refinedData.videoTitle || "video-ai"),
         });
       }
 

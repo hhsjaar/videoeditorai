@@ -119,7 +119,6 @@ interface RefinedData {
   aspectRatio: string;
   voice?: string;
   bgmId?: string;
-  seed?: number;
   scenes: Scene[];
 }
 
