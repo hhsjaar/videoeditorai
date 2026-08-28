@@ -9,7 +9,7 @@ const SCENE_SCHEMA = {
     voiceoverText: { type: "string", description: "Narasi VO Bahasa Indonesia natural untuk klip ini, pas dengan durasi, menyambung jadi satu naskah utuh kalau digabung semua klip" },
     visualPrompt: {
       type: "string",
-      description: "Prompt Bahasa Inggris untuk AI video engine (image-to-video) — gambar sumbernya SUDAH ada, jadi fokus prompt ini ke: aksi/gerakan yang terjadi, pergerakan kamera, dan audio (dialog/ambience/sound effect). JANGAN deskripsikan ulang tampilan statis gambar secara detail (itu sudah dari foto), cukup sebutkan singkat konteksnya lalu fokus ke motion & audio.",
+      description: "Prompt Bahasa Inggris untuk AI video engine (image-to-video) — gambar sumbernya SUDAH ada, jadi fokus prompt ini ke: aksi/gerakan yang terjadi, pergerakan kamera, dan audio (dialog/ambience/sound effect). JANGAN deskripsikan ulang tampilan statis gambar secara detail (itu sudah dari foto), cukup sebutkan singkat konteksnya lalu fokus ke motion & audio. WAJIB akhiri bagian audio dengan mengutip PERSIS teks voiceoverText scene ini sebagai narasi yang diucapkan, dalam format: 'Audio: ...(ambience/SFX)..., and a calm Indonesian voiceover saying, \"<voiceoverText di sini, verbatim>\"' — tanpa kutipan ini videonya akan bisu, tidak ada suara VO sama sekali.",
     },
     cameraMotion: { type: "string", enum: ["zoom-in", "zoom-out", "pan-left", "pan-right", "slow-tilt", "dolly-forward"] },
     transition: { type: "string", enum: ["light-leak", "zoom-blur", "flash-white", "fade-black", "film-burn", "passerby"] },
@@ -65,8 +65,9 @@ ${userContext ? `Konteks dari user: "${userContext}"` : ""}${hintsText}
 Tugas:
 1. Untuk SETIAP gambar, tulis satu "scene": narasi VO Bahasa Indonesia natural yang match dengan apa yang terlihat di gambar itu, dan prompt motion/audio Bahasa Inggris untuk video engine (gambar sumbernya sudah ada, prompt cukup fokus ke aksi/gerakan yang mestinya terjadi + kamera + audio).
 2. Kalau digabung urut, seluruh narasi VO harus mengalir jadi satu naskah utuh dengan hook di awal dan penutup yang pas di akhir — bukan potongan-potongan lepas.
-3. Kalau ada gambar yang isinya kurang jelas/ambigu (susah dipastikan itu gambar apa), tambahkan entry di "clarifyingQuestions" untuk index gambar itu — TAPI tetap isi scene dengan best-effort guess juga (jangan dikosongkan).
-4. "duration" tiap scene HARUS 4, 6, atau 8 detik saja.`,
+3. WAJIB, PALING PENTING: video engine ini nggak punya track audio terpisah — SATU-SATUNYA cara VO kedengeran di videonya adalah dengan mengutip PERSIS teks voiceoverText scene itu di dalam kalimat audio pada "visualPrompt" (bagian akhir, format "...and a calm Indonesian voiceover saying, \"<voiceoverText verbatim>\""). Kalau kutipan ini kelewat, videonya jadi BISU tanpa VO sama sekali — jangan sampai lupa di scene manapun.
+4. Kalau ada gambar yang isinya kurang jelas/ambigu (susah dipastikan itu gambar apa), tambahkan entry di "clarifyingQuestions" untuk index gambar itu — TAPI tetap isi scene dengan best-effort guess juga (jangan dikosongkan).
+5. "duration" tiap scene HARUS 4, 6, atau 8 detik saja.`,
     });
 
     const candidateModels = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-3-flash-preview"];
