@@ -58,6 +58,7 @@ export async function POST(req: NextRequest) {
       userPrompt,
       qaAnswers,
       targetDuration = 30,
+      referenceProfile,
       apiKey,
     } = await req.json();
 
@@ -74,6 +75,16 @@ export async function POST(req: NextRequest) {
 
     const numRows = Math.max(3, Math.round(targetDuration / 6));
 
+    const referenceText = referenceProfile
+      ? `\nREFERENSI GAYA (WAJIB DIIKUTI — video ini adalah remake/terinspirasi dari video lain, consistencyProfile HARUS mencerminkan gaya referensi ini, bukan gaya generik):
+- Gaya visual referensi: ${referenceProfile.visualStyle || ""}
+- Environment/setting referensi: ${referenceProfile.environment || ""}
+- Konsep besar referensi: ${referenceProfile.concept || ""}
+- Tone referensi: ${referenceProfile.tone || ""}
+- Pace editing referensi: ${referenceProfile.editingPace || ""}
+`
+      : "";
+
     const systemPrompt = `Anda adalah sutradara + penulis naskah untuk video pendek AI-generated.
 
 Konsep video hasil riset:
@@ -81,6 +92,7 @@ Konsep video hasil riset:
 - Konsep terpilih: ${JSON.stringify(concept || {}, null, 2)}
 - Jawaban klarifikasi dari user:
 ${answersText}
+${referenceText}
 
 Tugas: Buatkan storyboard untuk video total ${targetDuration} detik, berisi sekitar ${numRows} baris/klip berurutan. SETIAP baris = SATU klip AI video yang nanti langsung di-generate apa adanya (tidak dipecah/digabung lagi), jadi durasinya HARUS pas.
 
@@ -92,7 +104,7 @@ Aturan WAJIB:
 5. "emotion" singkat, 2-4 kata, sesuai momen di baris itu.
 6. "durationSec" tiap baris HARUS salah satu dari 4, 6, atau 8 detik — TIDAK BOLEH nilai lain (bukan 5, bukan 10). DEFAULT ke 6 detik untuk sebagian besar baris (lebih lega buat narasi & gerakan kamera), pakai 4 detik hanya untuk beat cepat/transisi singkat, dan 8 detik hanya untuk momen yang butuh napas lebih panjang. Total durasi semua baris harus mendekati ${targetDuration} detik.
 7. "startSec" dan "endSec" HARUS kumulatif akurat: baris pertama startSec=0, baris berikutnya startSec = endSec baris sebelumnya, dan endSec = startSec + durationSec.
-8. PALING PENTING: panjang "narration" tiap baris harus PAS kalau diucapkan dalam durationSec baris itu (kecepatan bicara natural ~2.5-3 kata/detik) — misal baris 6 detik idealnya sekitar 15-18 kata. JANGAN menulis narasi yang lebih panjang dari itu, karena nanti suaranya akan kepotong di video hasil generate. Lebih baik narasi sedikit lebih pendek/ada jeda natural daripada kepanjangan.`;
+8. PALING PENTING: panjang "narration" tiap baris harus PAS kalau diucapkan dalam durationSec baris itu (kecepatan bicara natural ~2.5-3 kata/detik) — misal baris 6 detik idealnya sekitar 15-18 kata. JANGAN menulis narasi yang lebih panjang dari itu, karena nanti suaranya akan kepotong di video hasil generate. Lebih baik narasi sedikit lebih pendek/ada jeda natural daripada kepanjangan.${referenceProfile ? "\n9. WAJIB: consistencyProfile.visualStyle, environment, dan cameraLanguage harus benar-benar mencerminkan REFERENSI GAYA di atas (bukan gaya bebas/generik) — ini video remake, jadi harus kelihatan senada dengan video aslinya." : ""}`;
 
     const candidateModels = ["gemini-flash-latest", "gemini-2.5-flash", "gemini-3-flash-preview"];
     let responseText = "";

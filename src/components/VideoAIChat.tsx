@@ -65,6 +65,28 @@ interface ClarifyingQuestion {
   question: string;
 }
 
+interface ReferenceTimestamp {
+  start: string;
+  end: string;
+  description: string;
+}
+
+interface ReferenceProfile {
+  visualStyle: string;
+  environment: string;
+  concept: string;
+  tone: string;
+  editingPace: string;
+}
+
+interface ReferenceAnalysis {
+  videoTitle: string;
+  sourceDurationSec: number;
+  timestamps: ReferenceTimestamp[];
+  referenceProfile: ReferenceProfile;
+  concepts: Concept[];
+}
+
 interface ConsistencyProfile {
   character: string;
   visualStyle: string;
@@ -122,7 +144,8 @@ interface ChatMsg {
     | "user-images"
     | "image-choice"
     | "image-storyboard-grid"
-    | "image-clarify";
+    | "image-clarify"
+    | "reference-analysis";
   text?: string;
   keywords?: string[];
   concepts?: Concept[];
@@ -134,6 +157,7 @@ interface ChatMsg {
   images?: UploadedRefImage[];
   imageStoryboard?: ImageStoryboardData;
   clarifyingQuestions?: ClarifyingQuestion[];
+  referenceAnalysis?: ReferenceAnalysis;
 }
 
 let idCounter = 0;
@@ -195,6 +219,7 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingImageScenesRef = useRef<{ images: Array<{ base64: string; mimeType: string }> } | null>(null);
   const clarifyAnswersRef = useRef<Record<number, string>>({});
+  const referenceProfileRef = useRef<ReferenceProfile | null>(null);
   const [qaSteps, setQaSteps] = useState<QAStep[]>([]);
   const [qaIndex, setQaIndex] = useState(0);
   const [qaAnswers, setQaAnswers] = useState<Record<string, string>>({});
@@ -244,6 +269,13 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
     setInput("");
     pushMsg({ sender: "user", kind: "text", text });
     setBriefText(text);
+    referenceProfileRef.current = null; // reset — set again below only if this brief is a reference link
+
+    const urlMatch = text.match(/https?:\/\/[^\s]+/i);
+    if (urlMatch) {
+      await handleAnalyzeReference(urlMatch[0]);
+      return;
+    }
 
     const loadingId = pushLoading("Lagi riset angle & keyword yang relevan...");
     try {
@@ -260,6 +292,32 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
     } catch (err: any) {
       removeMsg(loadingId);
       pushMsg({ sender: "ai", kind: "text", text: `Maaf, gagal riset ide: ${err.message}` });
+    }
+  }
+
+  // ─── Reference-video-link flow ───────────────────────────────────────────
+  async function handleAnalyzeReference(url: string) {
+    const loadingId = pushLoading("Nonton & menganalisis video referensi (bisa beberapa menit buat video panjang)...");
+    try {
+      const data = await callApi("/api/video-ai/analyze-reference", { url, apiKey });
+      removeMsg(loadingId);
+      referenceProfileRef.current = data.referenceProfile || null;
+      pushMsg({
+        sender: "ai",
+        kind: "reference-analysis",
+        referenceAnalysis: {
+          videoTitle: data.videoTitle,
+          sourceDurationSec: data.sourceDurationSec,
+          timestamps: data.timestamps || [],
+          referenceProfile: data.referenceProfile,
+          concepts: data.concepts || [],
+        },
+        text: `Udah aku tonton & analisis! "${data.videoTitle}" (${data.sourceDurationSec}s). Cek breakdown-nya, terus pilih mau dibuat serupa atau versi lain.`,
+      });
+      setPhase("concepts");
+    } catch (err: any) {
+      removeMsg(loadingId);
+      pushMsg({ sender: "ai", kind: "text", text: `Maaf, gagal menganalisis link video: ${err.message}` });
     }
   }
 
@@ -501,6 +559,7 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
         userPrompt: briefText,
         qaAnswers: answers,
         targetDuration: 30,
+        referenceProfile: referenceProfileRef.current || undefined,
         apiKey,
       });
       removeMsg(loadingId);
@@ -735,7 +794,7 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
                 phase === "brief" && pendingImages.length > 0
                   ? "Tambahin konteks (opsional), lalu kirim..."
                   : phase === "brief"
-                  ? "Contoh: kerja remote dari kafe, buat YouTube Shorts, target pekerja muda 22-30 tahun... (atau upload foto pakai tombol +)"
+                  ? "Contoh: kerja remote dari kafe, buat YouTube Shorts... (atau upload foto pakai +, atau tempel link video YouTube/IG/TikTok)"
                   : phase === "qa-custom"
                   ? "Tulis jawabanmu sendiri..."
                   : phase === "image-clarify"
@@ -817,6 +876,10 @@ function ChatBubble({
         }`}
       >
         {msg.text && <p className="whitespace-pre-wrap">{msg.text}</p>}
+
+        {msg.kind === "reference-analysis" && msg.referenceAnalysis && (
+          <ReferenceAnalysisView data={msg.referenceAnalysis} onPickConcept={onPickConcept} />
+        )}
 
         {msg.kind === "keywords-concepts" && (
           <div className="mt-3 space-y-3">
@@ -976,6 +1039,105 @@ function ConceptCard({ concept, onClick, rare }: { concept: Concept; onClick: ()
       <p className="text-xs text-slate-400 mt-1">{concept.summary}</p>
       <p className="text-xs text-purple-300 italic mt-1.5">"{concept.hook}"</p>
     </button>
+  );
+}
+
+function ReferenceAnalysisView({ data, onPickConcept }: { data: ReferenceAnalysis; onPickConcept: (c: Concept) => void }) {
+  const [showCustom, setShowCustom] = useState(false);
+  const [customText, setCustomText] = useState("");
+  const mainConcept = data.concepts[0];
+  const otherConcepts = data.concepts.slice(1);
+
+  function submitCustom() {
+    const text = customText.trim();
+    if (!text) return;
+    onPickConcept({
+      id: `custom_${Date.now()}`,
+      title: "Versi Custom",
+      angle: "Custom dari user",
+      hook: "",
+      summary: text,
+      vibeTags: [],
+      recommendedVoice: "Zephyr",
+      recommendedBgm: "bsl1",
+    });
+  }
+
+  return (
+    <div className="mt-3 space-y-3">
+      <div className="overflow-x-auto rounded-xl border border-slate-800 max-h-64 overflow-y-auto">
+        <table className="w-full text-[11px] border-collapse">
+          <thead className="sticky top-0">
+            <tr className="bg-slate-900 text-slate-400">
+              <th className="p-2 text-left font-black border-b border-slate-800">Waktu</th>
+              <th className="p-2 text-left font-black border-b border-slate-800">Apa yang terjadi</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.timestamps.map((t, i) => (
+              <tr key={i} className="border-b border-slate-800/60 align-top text-slate-300">
+                <td className="p-2 whitespace-nowrap font-bold text-purple-300">{t.start}–{t.end}</td>
+                <td className="p-2">{t.description}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {data.referenceProfile && (
+        <div className="text-xs bg-purple-950/20 rounded-xl p-3 border border-purple-500/30 space-y-1">
+          <p className="font-black text-purple-300 mb-1">🎬 Profil gaya video ini</p>
+          <p><span className="font-bold text-purple-300">Gaya visual: </span>{data.referenceProfile.visualStyle}</p>
+          <p><span className="font-bold text-purple-300">Environment: </span>{data.referenceProfile.environment}</p>
+          <p><span className="font-bold text-purple-300">Konsep: </span>{data.referenceProfile.concept}</p>
+          <p><span className="font-bold text-purple-300">Tone: </span>{data.referenceProfile.tone}</p>
+        </div>
+      )}
+
+      <p className="text-xs font-bold text-slate-300">Mau dibuat serupa, atau versi lain?</p>
+
+      {mainConcept && (
+        <div className="space-y-2">
+          <ConceptCard concept={mainConcept} onClick={() => onPickConcept(mainConcept)} />
+        </div>
+      )}
+      {otherConcepts.length > 0 && (
+        <div className="space-y-2 pt-1">
+          <p className="text-[10px] font-black text-amber-400 uppercase tracking-wider">Versi Lain</p>
+          {otherConcepts.map((c) => (
+            <ConceptCard key={c.id} concept={c} onClick={() => onPickConcept(c)} rare />
+          ))}
+        </div>
+      )}
+
+      <div className="pt-1">
+        {!showCustom ? (
+          <button
+            onClick={() => setShowCustom(true)}
+            className="text-xs font-bold px-3 py-1.5 rounded-xl border border-dashed border-slate-600 text-slate-400 hover:border-purple-500 hover:text-white transition-all"
+          >
+            ✍️ Custom, aku tulis versi sendiri
+          </button>
+        ) : (
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              value={customText}
+              onChange={(e) => setCustomText(e.target.value)}
+              placeholder="Tulis versi remake yang kamu mau..."
+              className="flex-1 text-xs p-2.5 rounded-xl bg-slate-950 border border-slate-700 text-white placeholder-slate-500 focus:border-purple-500 outline-none"
+            />
+            <button
+              onClick={submitCustom}
+              disabled={!customText.trim()}
+              className="p-2.5 bg-gradient-to-r from-purple-600 to-indigo-600 disabled:opacity-40 text-white rounded-xl"
+            >
+              <Send className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
