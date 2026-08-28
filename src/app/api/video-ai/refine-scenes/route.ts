@@ -137,6 +137,11 @@ ${CINEMATOGRAPHY_RULES}`;
         voice,
         bgmId,
         totalDuration: storyboard.rows.reduce((acc: number, r: any) => acc + Math.max(1, r.endSec - r.startSec), 0),
+        // One seed for the whole project, reused across every scene's Veo
+        // call — anchors the generation so clips actually look like the same
+        // shoot instead of each rolling a fresh random look (Kling has no
+        // seed param, so this only affects the Veo-quality path).
+        seed: Math.floor(Math.random() * 2147483647),
         scenes,
       },
     });

@@ -114,6 +114,10 @@ ${CINEMATOGRAPHY_RULES}`,
         summary: "",
         aspectRatio: "9:16",
         stylePreset: "cinematic",
+        // Shared across every scene's Veo call so rendering style (grain,
+        // grading) stays consistent between clips — each clip already has
+        // its own real source image anchoring the subject itself.
+        seed: Math.floor(Math.random() * 2147483647),
         scenes,
       },
     });

@@ -56,6 +56,11 @@ export interface VeoJobState {
   // the end result still matches Veo's "one clip, audio included" contract.
   voiceoverText: string | null;
   voiceName: string | null;
+  // Same seed reused across every scene in a project (Veo only — Kling's
+  // API has no seed param) — matching text descriptions alone still leave
+  // Veo free to roll a new random look per clip; a shared seed anchors the
+  // generation so consecutive clips actually look like the same shoot.
+  seed: number | null;
   operationName: string | null;
   videoUrl: string | null;
   error: string | null;
@@ -111,6 +116,7 @@ export function enqueueVeoJob(params: {
   imageMimeType?: string;
   voiceoverText?: string;
   voiceName?: string;
+  seed?: number;
 }): VeoJobState {
   const state: VeoJobState = {
     jobId: params.jobId,
@@ -124,6 +130,7 @@ export function enqueueVeoJob(params: {
     imageMimeType: params.imageMimeType || null,
     voiceoverText: params.voiceoverText || null,
     voiceName: params.voiceName || null,
+    seed: typeof params.seed === "number" ? params.seed : null,
     operationName: null,
     videoUrl: null,
     error: null,
@@ -205,6 +212,11 @@ async function attemptGenerate(job: VeoJobState, rawPath: string): Promise<void>
       numberOfVideos: 1,
       durationSeconds: job.durationSeconds,
       aspectRatio: job.aspectRatio,
+      // Reusing the same seed across every scene in a project measurably
+      // improves inter-clip consistency — per Google's own docs, an
+      // unchanged seed + unchanged inputs gives consistent results, whereas
+      // omitting it rolls a fresh random look on every single call.
+      ...(typeof job.seed === "number" ? { seed: job.seed } : {}),
       // NOTE: generateAudio and personGeneration are Vertex-only knobs —
       // the Gemini Developer API (what GEMINI_API_KEY authenticates
       // against) generates native audio by default on Veo 3.x models and
