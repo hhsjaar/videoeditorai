@@ -1900,6 +1900,14 @@ export default function CapCutWebStudio() {
       );
       const newFootages = results.filter((f): f is UploadedFootage => f !== null);
       setFootages(newFootages);
+      // The timeline's actual per-clip duration comes from customClipDurations,
+      // not footage.duration directly (every other upload path syncs this same
+      // way) — without it, clips fall back to the generic 3s default (or worse,
+      // stale entries left over from a previous project), chopping a 6-clip/36s
+      // AI reel down to a few seconds in the studio.
+      const durMap: { [key: number]: number } = {};
+      newFootages.forEach((f, i) => { durMap[i] = f.duration; });
+      setCustomClipDurations(durMap);
     }
 
     setActiveAppTab("klip-ai");
