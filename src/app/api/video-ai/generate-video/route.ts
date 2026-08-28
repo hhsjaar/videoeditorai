@@ -5,13 +5,18 @@ import { writeFile, mkdir } from "fs/promises";
 import { randomUUID } from "crypto";
 import { enqueueVeoJob, type VeoQuality } from "@/lib/veoQueue";
 
-const VALID_QUALITIES: VeoQuality[] = ["lite", "fast", "standard"];
+const VALID_QUALITIES: VeoQuality[] = ["lite", "fast", "standard", "kling"];
 const VALID_DURATIONS = [4, 6, 8];
+const VALID_KLING_DURATIONS = [5, 10];
 
-// Rounds UP to the nearest Veo-legal duration (never down) — a clip shorter
-// than its narration's actual length would chop the voiceover off mid-word.
+// Rounds UP to the nearest provider-legal duration (never down) — a clip
+// shorter than its narration's actual length would chop the voiceover off
+// mid-word. Veo allows 4/6/8s; Kling (fal.ai) only allows 5/10s.
 function clampToVeoDuration(requested: number): 4 | 6 | 8 {
   return (VALID_DURATIONS.find((v) => v >= requested) ?? 8) as 4 | 6 | 8;
+}
+function clampToKlingDuration(requested: number): 5 | 10 {
+  return (VALID_KLING_DURATIONS.find((v) => v >= requested) ?? 10) as 5 | 10;
 }
 
 export async function POST(req: NextRequest) {
@@ -25,12 +30,18 @@ export async function POST(req: NextRequest) {
 
     const veoQuality: VeoQuality = VALID_QUALITIES.includes(quality) ? quality : "lite";
 
-    const activeApiKey = apiKey || process.env.GEMINI_API_KEY;
-    if (!activeApiKey) {
-      return NextResponse.json(
-        { error: "API Key Google Gemini belum dikonfigurasi." },
-        { status: 400 }
-      );
+    if (veoQuality === "kling") {
+      if (!process.env.FAL_KEY) {
+        return NextResponse.json({ error: "API Key fal.ai (FAL_KEY) belum dikonfigurasi di server." }, { status: 400 });
+      }
+    } else {
+      const activeApiKey = apiKey || process.env.GEMINI_API_KEY;
+      if (!activeApiKey) {
+        return NextResponse.json(
+          { error: "API Key Google Gemini belum dikonfigurasi." },
+          { status: 400 }
+        );
+      }
     }
 
     if (!refinedData || !refinedData.scenes || refinedData.scenes.length === 0) {
@@ -131,7 +142,7 @@ export async function POST(req: NextRequest) {
           jobId: veoJobId,
           prompt: visualPrompt,
           quality: veoQuality,
-          durationSeconds: clampToVeoDuration(sc.duration || 8),
+          durationSeconds: veoQuality === "kling" ? clampToKlingDuration(sc.duration || 5) : clampToVeoDuration(sc.duration || 8),
           aspectRatio: refinedData.aspectRatio === "16:9" ? "16:9" : "9:16",
           // When this scene came from an uploaded/storyboard reference image,
           // Veo animates FROM that photo instead of imagining it from text —

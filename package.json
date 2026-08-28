@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@fal-ai/client": "^1.10.1",
     "@google/genai": "^2.16.0",
     "@remotion/bundler": "^4.0.509",
     "@remotion/cli": "^4.0.509",

@@ -14,17 +14,19 @@
  */
 
 import path from "path";
-import { mkdir, rm, readdir, stat } from "fs/promises";
+import { mkdir, rm, readdir, stat, writeFile } from "fs/promises";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { GoogleGenAI } from "@google/genai";
+import { fal } from "@fal-ai/client";
 import { loadPersistedJobs, persistJobs } from "./jobPersistence";
-import { QUALITY_TO_MODEL, type VeoQuality } from "./veoPricing";
+import { QUALITY_TO_MODEL, providerForQuality, type VeoQuality } from "./veoPricing";
 import { getCachedFfmpeg } from "./renderQueue";
 
 const execAsync = promisify(exec);
 
 const genai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "" });
+if (process.env.FAL_KEY) fal.config({ credentials: process.env.FAL_KEY });
 
 const JOBS_FILE = "veo-jobs.json";
 export const OUTPUT_DIR = path.join(process.cwd(), "data", "veo-output");
@@ -173,7 +175,15 @@ async function probeDurationSeconds(filePath: string, ffmpegBin: string): Promis
   }
 }
 
-async function attemptGenerate(job: VeoJobState): Promise<{ video: any }> {
+// Writes the generated clip's raw bytes to rawPath — same contract for every
+// provider, so everything downstream (faststart remux, duration probe, job
+// bookkeeping) stays provider-agnostic.
+async function attemptGenerate(job: VeoJobState, rawPath: string): Promise<void> {
+  if (providerForQuality(job.quality) === "kling") {
+    await attemptGenerateKling(job, rawPath);
+    return;
+  }
+
   const model = QUALITY_TO_MODEL[job.quality];
   const source = job.imageBytes
     ? { prompt: job.prompt, image: { imageBytes: job.imageBytes, mimeType: job.imageMimeType || "image/jpeg" } }
@@ -210,7 +220,42 @@ async function attemptGenerate(job: VeoJobState): Promise<{ video: any }> {
     throw new Error(raiReason || "Gemini tidak mengembalikan video (kemungkinan diblokir filter keamanan konten).");
   }
 
-  return { video: generated.video };
+  await genai.files.download({ file: generated.video, downloadPath: rawPath });
+}
+
+// Kling (via fal.ai) — added alongside Veo, not a replacement, mainly to
+// dodge Google's tight Veo Lite rate limit (2 requests/min, 10/day on Tier 1).
+// fal.ai uses a concurrency limit instead (scales with spend, no hard daily cap).
+async function attemptGenerateKling(job: VeoJobState, rawPath: string): Promise<void> {
+  if (!process.env.FAL_KEY) {
+    throw new Error("FAL_KEY belum dikonfigurasi di server (butuh API key fal.ai untuk pakai Kling).");
+  }
+
+  const endpoint = job.imageBytes
+    ? "fal-ai/kling-video/v2.5-turbo/pro/image-to-video"
+    : "fal-ai/kling-video/v2.5-turbo/pro/text-to-video";
+
+  // Kling only supports 16:9 / 9:16 / 1:1 — same values our aspectRatio
+  // already uses, so no mapping needed.
+  const input: Record<string, unknown> = {
+    prompt: job.prompt,
+    duration: String(job.durationSeconds), // Kling wants "5" | "10", not a number
+    aspect_ratio: job.aspectRatio,
+  };
+  if (job.imageBytes) {
+    input.image_url = `data:${job.imageMimeType || "image/jpeg"};base64,${job.imageBytes}`;
+  }
+
+  // The endpoint string is computed at runtime, so the client's per-model
+  // typed-input overloads can't narrow it — cast at the boundary.
+  const result: any = await fal.subscribe(endpoint, { input, logs: false } as any);
+  const remoteUrl = result?.data?.video?.url;
+  if (!remoteUrl) throw new Error("fal.ai tidak mengembalikan video (kemungkinan diblokir filter konten atau prompt ditolak).");
+
+  const res = await fetch(remoteUrl);
+  if (!res.ok) throw new Error(`Gagal mengunduh hasil video dari fal.ai (HTTP ${res.status}).`);
+  const buffer = Buffer.from(await res.arrayBuffer());
+  await writeFile(rawPath, buffer);
 }
 
 async function runJob(job: VeoJobState) {
@@ -218,12 +263,17 @@ async function runJob(job: VeoJobState) {
   scheduleSave();
 
   try {
-    let generated: { video: any } | null = null;
+    await mkdir(OUTPUT_DIR, { recursive: true });
+    const outPath = path.join(OUTPUT_DIR, `${job.jobId}.mp4`);
+    const rawPath = path.join(OUTPUT_DIR, `${job.jobId}.raw.mp4`);
+
+    let succeeded = false;
     let lastErr: any = null;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       try {
-        generated = await attemptGenerate(job);
+        await attemptGenerate(job, rawPath);
+        succeeded = true;
         break;
       } catch (err: any) {
         lastErr = err;
@@ -234,19 +284,17 @@ async function runJob(job: VeoJobState) {
         console.warn(`[veoQueue] Attempt ${attempt}/${MAX_ATTEMPTS} failed for ${job.jobId}${retryable ? `, retrying in ${delay / 1000}s...` : " (not retryable)"}:`, msg);
         if (!retryable || attempt === MAX_ATTEMPTS) {
           if (rateLimited) {
-            throw new Error("Kena rate limit Google (request Veo terlalu sering dalam waktu singkat — Tier 1 cuma bolehin beberapa request per menit/hari). Tunggu 1-2 menit lalu coba lagi, atau cek kuota di ai.dev/rate-limit.");
+            const rateLimitMsg = providerForQuality(job.quality) === "kling"
+              ? "Kena batas concurrency fal.ai (terlalu banyak request Kling berbarengan). Tunggu sebentar lalu coba lagi, atau cek limit di dashboard fal.ai."
+              : "Kena rate limit Google (request Veo terlalu sering dalam waktu singkat — Tier 1 cuma bolehin beberapa request per menit/hari). Tunggu 1-2 menit lalu coba lagi, atau cek kuota di ai.dev/rate-limit.";
+            throw new Error(rateLimitMsg);
           }
           throw err;
         }
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
-    if (!generated) throw lastErr || new Error("Gagal generate video.");
-
-    await mkdir(OUTPUT_DIR, { recursive: true });
-    const outPath = path.join(OUTPUT_DIR, `${job.jobId}.mp4`);
-    const rawPath = path.join(OUTPUT_DIR, `${job.jobId}.raw.mp4`);
-    await genai.files.download({ file: generated.video, downloadPath: rawPath });
+    if (!succeeded) throw lastErr || new Error("Gagal generate video.");
 
     // Veo's raw download writes the moov atom at the END of the file (not
     // "faststart"), which makes HTML5 <video> show a black frame / 0:00
