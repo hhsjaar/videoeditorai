@@ -91,7 +91,7 @@ Aturan WAJIB untuk tiap "visualPrompt":
 2. Deskriptif, seolah menceritakan apa yang terlihat — bukan kalimat perintah ("show", "generate", dsb dilarang).
 3. ${hasCharacter ? "WAJIB buka paragraf dengan deskripsi karakter di atas KATA-PER-KATA sama (boleh diterjemahkan ke Inggris tapi detail & urutannya harus identik) di SETIAP scene yang menampilkan karakter — jangan sampai deskripsi berubah antar scene." : "Video ini faceless — jangan munculkan karakter manusia tetap yang sama, fokus ke objek/environment/b-roll."}
 4. Gaya visual (visualStyle di atas) HARUS disebut dengan istilah yang sama/konsisten di SETIAP scene (lensa, grain, color grade, dsb) supaya terasa satu video.
-5. Sertakan audio: dialog${per10 ? " (WAJIB: terjemahkan narasi baris itu ke Bahasa Inggris yang natural dan kutip versi Inggris-nya di dalam narasi audio — output akhir ini murni Bahasa Inggris)" : " (kalau ada, kutip voiceoverText baris itu dalam Bahasa Indonesia di dalam narasi audio)"}, ambience lokasi, dan sound effect yang relevan.
+5. Sertakan audio: dialog (kalau ada, kutip voiceoverText baris itu dalam Bahasa Indonesia APA ADANYA di dalam narasi audio — JANGAN diterjemahkan ke Inggris, sama seperti mode default), ambience lokasi, dan sound effect yang relevan.
 6. Jangan pakai nama orang asli/tokoh terkenal.
 7. "voiceoverText" HARUS sama persis dengan narasi baris storyboard sumbernya (jangan diubah).
 8. ${per10 ? '"duration" WAJIB tepat 10 detik untuk setiap scene. Tiap scene mewakili satu blok 10 detik penuh, jadi visualPrompt boleh memuat beberapa beat aksi yang mengalir dalam 10 detik itu.' : '"duration" harus salah satu dari 4, 6, atau 8 detik — pilih yang paling dekat dengan durasi baris storyboard sumbernya.'}

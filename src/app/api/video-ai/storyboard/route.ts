@@ -48,7 +48,7 @@ function buildResponseSchema(per10: boolean) {
         type: "object",
         description: "Detail yang HARUS identik di seluruh klip video supaya nyambung jadi satu kesatuan saat dirangkai",
         properties: {
-          character: { type: "string", description: "Deskripsi karakter utama lengkap (umur, etnis/kulit, rambut, wajah, pakaian dari atas ke bawah, aksesoris) — string KOSONG kalau video ini faceless/b-roll tanpa karakter tetap" },
+          character: { type: "string", description: "Deskripsi karakter utama lengkap (umur, etnis/kulit, rambut, wajah, pakaian dari atas ke bawah, aksesoris) — string KOSONG kalau video ini faceless/b-roll tanpa karakter tetap. WAJIB sebutkan eksplisit karakternya orang Indonesia (contoh: 'a 24-year-old Indonesian man/woman with...') kecuali brief/konteks user secara eksplisit minta kewarganegaraan/etnis lain." },
           visualStyle: { type: "string", description: "Gaya visual & rendering yang konsisten dipakai di semua klip, contoh: 'cinematic vertical 9:16, 35mm lens, shallow depth of field, natural film grain, muted warm color grade, photorealistic'" },
           environment: { type: "string", description: "Deskripsi lokasi/environment tetap yang dipakai berulang di seluruh klip (tempat, properti, waktu hari)" },
           lighting: { type: "string", description: "Pencahayaan & mood warna yang konsisten di semua klip" },

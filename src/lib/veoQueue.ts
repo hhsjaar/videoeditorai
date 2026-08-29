@@ -233,6 +233,16 @@ async function attemptGenerate(job: VeoJobState, rawPath: string): Promise<void>
   await genai.files.download({ file: generated.video, downloadPath: rawPath });
 }
 
+// Our prompt-writing convention (refine-scenes / image-scenes) always ends
+// the paragraph with an "Audio: ...voiceover saying '...'" clause — cut
+// everything from that word onward so Kling only sees the visual/motion
+// description it can actually act on.
+function stripAudioClause(prompt: string): string {
+  const idx = prompt.search(/\bAudio:/i);
+  if (idx === -1) return prompt;
+  return prompt.slice(0, idx).replace(/[.\s]+$/, ".").trim();
+}
+
 // Kling (via fal.ai) — added alongside Veo, not a replacement, mainly to
 // dodge Google's tight Veo Lite rate limit (2 requests/min, 10/day on Tier 1).
 // fal.ai uses a concurrency limit instead (scales with spend, no hard daily cap).
@@ -248,7 +258,16 @@ async function attemptGenerateKling(job: VeoJobState, rawPath: string): Promise<
   // Kling only supports 16:9 / 9:16 / 1:1 — same values our aspectRatio
   // already uses, so no mapping needed.
   const input: Record<string, unknown> = {
-    prompt: job.prompt,
+    // Our prompts are written for Veo, which speaks the dialogue quoted in
+    // the trailing "Audio: ...voiceover saying '...'" clause itself. Kling
+    // can't act on that (no audio capability at all — real narration gets
+    // muxed in separately below) but still tries to visually interpret it,
+    // which is likely why clips came back with English
+    // captions/lip-sync-ish artifacts despite the quoted text being
+    // Indonesian: Kling's underlying model defaults any dialogue cue it
+    // can't place as Chinese/English to English. Stripping it keeps Kling
+    // focused purely on the visual/motion description it can actually use.
+    prompt: stripAudioClause(job.prompt),
     duration: String(job.durationSeconds), // Kling wants "5" | "10", not a number
     aspect_ratio: job.aspectRatio,
   };
