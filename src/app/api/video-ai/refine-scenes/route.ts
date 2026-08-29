@@ -2,31 +2,37 @@ import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 import { CINEMATOGRAPHY_RULES } from "@/lib/videoPromptCraft";
 
-const SCENE_SCHEMA = {
-  type: "object",
-  properties: {
-    sceneNumber: { type: "integer" },
-    duration: { type: "integer", enum: [4, 6, 8], description: "Durasi scene dalam detik — HARUS salah satu dari 4, 6, atau 8 (batasan AI video engine)" },
-    visualPrompt: {
-      type: "string",
-      description:
-        "Prompt video Bahasa Inggris, ditulis MENGALIR dalam satu paragraf (bukan daftar/bullet), mengikuti urutan: [subject + detailed description] + [specific action + EXPLICIT staging/blocking, arah hadap & posisi elemen lain relatif ke subjek] + [location & time] + [camera movement DENGAN tujuan naratif jelas, bukan cuma nama gerakan] + [lighting & mood] + [visual style] + [audio: dialogue/ambience/sound effects]. Deskriptif seperti menceritakan apa yang terlihat, bukan perintah.",
+function buildSceneSchema(per10: boolean) {
+  return {
+    type: "object",
+    properties: {
+      sceneNumber: { type: "integer" },
+      duration: per10
+        ? { type: "integer", enum: [10], description: "Durasi scene WAJIB tepat 10 detik (mode scripting prompt per 10 detik)" }
+        : { type: "integer", enum: [4, 6, 8], description: "Durasi scene dalam detik — HARUS salah satu dari 4, 6, atau 8 (batasan AI video engine)" },
+      visualPrompt: {
+        type: "string",
+        description:
+          "Prompt video Bahasa Inggris, ditulis MENGALIR dalam satu paragraf (bukan daftar/bullet), mengikuti urutan: [subject + detailed description] + [specific action + EXPLICIT staging/blocking, arah hadap & posisi elemen lain relatif ke subjek] + [location & time] + [camera movement DENGAN tujuan naratif jelas, bukan cuma nama gerakan] + [lighting & mood] + [visual style] + [audio: dialogue/ambience/sound effects]. Deskriptif seperti menceritakan apa yang terlihat, bukan perintah.",
+      },
+      voiceoverText: { type: "string", description: "Teks voice over Bahasa Indonesia natural, komunikatif, pas dengan durasi — SAMA PERSIS dengan narasi baris storyboard yang jadi sumbernya" },
+      cameraMotion: { type: "string", enum: ["zoom-in", "zoom-out", "pan-left", "pan-right", "slow-tilt", "dolly-forward"] },
+      transition: { type: "string", enum: ["light-leak", "zoom-blur", "flash-white", "fade-black", "film-burn", "passerby"] },
+      overlayTitle: { type: "string", description: "Teks judul/kata kunci singkat penarik perhatian, atau string kosong jika tidak perlu" },
     },
-    voiceoverText: { type: "string", description: "Teks voice over Bahasa Indonesia natural, komunikatif, pas dengan durasi — SAMA PERSIS dengan narasi baris storyboard yang jadi sumbernya" },
-    cameraMotion: { type: "string", enum: ["zoom-in", "zoom-out", "pan-left", "pan-right", "slow-tilt", "dolly-forward"] },
-    transition: { type: "string", enum: ["light-leak", "zoom-blur", "flash-white", "fade-black", "film-burn", "passerby"] },
-    overlayTitle: { type: "string", description: "Teks judul/kata kunci singkat penarik perhatian, atau string kosong jika tidak perlu" },
-  },
-  required: ["sceneNumber", "duration", "visualPrompt", "voiceoverText", "cameraMotion", "transition", "overlayTitle"],
-};
+    required: ["sceneNumber", "duration", "visualPrompt", "voiceoverText", "cameraMotion", "transition", "overlayTitle"],
+  };
+}
 
-const RESPONSE_SCHEMA = {
-  type: "object",
-  properties: {
-    scenes: { type: "array", items: SCENE_SCHEMA },
-  },
-  required: ["scenes"],
-};
+function buildResponseSchema(per10: boolean) {
+  return {
+    type: "object",
+    properties: {
+      scenes: { type: "array", items: buildSceneSchema(per10) },
+    },
+    required: ["scenes"],
+  };
+}
 
 // Rounds UP to the nearest Veo-legal duration (never down) — a clip shorter
 // than its narration's actual length would chop the voiceover off mid-word.
@@ -42,8 +48,11 @@ export async function POST(req: NextRequest) {
       aspectRatio = "9:16",
       voice = "Zephyr",
       bgmId = "bsl1",
+      clipDurationSec,
       apiKey,
     } = await req.json();
+
+    const per10 = clipDurationSec === 10;
 
     const activeApiKey = apiKey || process.env.GEMINI_API_KEY;
     if (!activeApiKey) {
@@ -82,11 +91,11 @@ Aturan WAJIB untuk tiap "visualPrompt":
 2. Deskriptif, seolah menceritakan apa yang terlihat — bukan kalimat perintah ("show", "generate", dsb dilarang).
 3. ${hasCharacter ? "WAJIB buka paragraf dengan deskripsi karakter di atas KATA-PER-KATA sama (boleh diterjemahkan ke Inggris tapi detail & urutannya harus identik) di SETIAP scene yang menampilkan karakter — jangan sampai deskripsi berubah antar scene." : "Video ini faceless — jangan munculkan karakter manusia tetap yang sama, fokus ke objek/environment/b-roll."}
 4. Gaya visual (visualStyle di atas) HARUS disebut dengan istilah yang sama/konsisten di SETIAP scene (lensa, grain, color grade, dsb) supaya terasa satu video.
-5. Sertakan audio: dialog (kalau ada, kutip voiceoverText baris itu dalam Bahasa Indonesia di dalam narasi audio), ambience lokasi, dan sound effect yang relevan.
+5. Sertakan audio: dialog${per10 ? " (WAJIB: terjemahkan narasi baris itu ke Bahasa Inggris yang natural dan kutip versi Inggris-nya di dalam narasi audio — output akhir ini murni Bahasa Inggris)" : " (kalau ada, kutip voiceoverText baris itu dalam Bahasa Indonesia di dalam narasi audio)"}, ambience lokasi, dan sound effect yang relevan.
 6. Jangan pakai nama orang asli/tokoh terkenal.
 7. "voiceoverText" HARUS sama persis dengan narasi baris storyboard sumbernya (jangan diubah).
-8. "duration" harus salah satu dari 4, 6, atau 8 detik — pilih yang paling dekat dengan durasi baris storyboard sumbernya.
-9. Urutan "scenes" HARUS sama dengan urutan baris storyboard di atas, sceneNumber mulai dari 1.
+8. ${per10 ? '"duration" WAJIB tepat 10 detik untuk setiap scene. Tiap scene mewakili satu blok 10 detik penuh, jadi visualPrompt boleh memuat beberapa beat aksi yang mengalir dalam 10 detik itu.' : '"duration" harus salah satu dari 4, 6, atau 8 detik — pilih yang paling dekat dengan durasi baris storyboard sumbernya.'}
+9. Urutan "scenes" HARUS sama dengan urutan baris storyboard di atas, sceneNumber mulai dari 1${per10 ? ", jumlah scene HARUS sama dengan jumlah baris storyboard" : ""}.
 
 Aturan sinematografi tambahan (WAJIB, ini yang paling sering bikin hasil video AI kelihatan "kosong" secara emosional kalau dilewatkan):
 ${CINEMATOGRAPHY_RULES}`;
@@ -103,7 +112,7 @@ ${CINEMATOGRAPHY_RULES}`;
           config: {
             temperature: 0.5,
             responseMimeType: "application/json",
-            responseJsonSchema: RESPONSE_SCHEMA,
+            responseJsonSchema: buildResponseSchema(per10),
           },
         });
         if (response && response.text) {
@@ -121,7 +130,7 @@ ${CINEMATOGRAPHY_RULES}`;
     const scenes = (parsedData.scenes || []).map((sc: any, i: number) => ({
       ...sc,
       sceneNumber: i + 1,
-      duration: clampToVeoDuration(sc.duration || 6),
+      duration: per10 ? 10 : clampToVeoDuration(sc.duration || 6),
     }));
 
     return NextResponse.json({

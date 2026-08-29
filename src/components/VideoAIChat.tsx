@@ -140,6 +140,7 @@ interface ChatMsg {
     | "quick-replies"
     | "storyboard-id"
     | "storyboard"
+    | "duration-choice"
     | "scenes-generate"
     | "user-images"
     | "image-choice"
@@ -213,8 +214,21 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
   ]);
   const [input, setInput] = useState("");
   const [phase, setPhase] = useState<
-    "brief" | "concepts" | "qa" | "qa-custom" | "storyboard" | "done" | "image-choice" | "image-clarify"
+    | "brief"
+    | "duration-choice"
+    | "duration-custom"
+    | "concepts"
+    | "qa"
+    | "qa-custom"
+    | "storyboard"
+    | "done"
+    | "image-choice"
+    | "image-clarify"
   >("brief");
+  // When true, the whole run is prompt-only: clips are grouped per 10s and the
+  // final output is just English prompts — no video generate/merge/download.
+  const [promptOnlyMode, setPromptOnlyMode] = useState(false);
+  const [customTotalDuration, setCustomTotalDuration] = useState<number | null>(null);
   const [pendingImages, setPendingImages] = useState<UploadedRefImage[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingImageScenesRef = useRef<{ images: Array<{ base64: string; mimeType: string }> } | null>(null);
@@ -277,6 +291,21 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
       return;
     }
 
+    // Before researching topics: ask default duration vs custom-per-10s.
+    // Custom-per-10s switches the whole run into prompt-only mode (no video).
+    setPromptOnlyMode(false);
+    setCustomTotalDuration(null);
+    pushMsg({
+      sender: "ai",
+      kind: "duration-choice",
+      text:
+        "Sebelum lanjut, video ini mau dibuat dengan durasi default, atau custom durasi per 10 detik?\n\n• Default — alur biasa: riset topik → storyboard → prompt → generate video.\n• Custom durasi per 10 detik — kamu tentukan total durasi (kelipatan 10), breakdown & naskahnya dikelompokkan per 10 detik. Mode ini HANYA menghasilkan prompt Bahasa Inggris (tanpa generate video, edit, atau download).",
+    });
+    setPhase("duration-choice");
+  }
+
+  // Shared step 1b: kick off topic/keyword research (used by both duration modes).
+  async function runConcepts(text: string) {
     const loadingId = pushLoading("Lagi riset angle & keyword yang relevan...");
     try {
       const data = await callApi("/api/video-ai/concepts", { prompt: text, aspectRatio: "9:16", targetDuration: 30, tone: "kreatif", apiKey });
@@ -293,6 +322,51 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
       removeMsg(loadingId);
       pushMsg({ sender: "ai", kind: "text", text: `Maaf, gagal riset ide: ${err.message}` });
     }
+  }
+
+  function handleDurationDefault(msgId: string) {
+    updateMsg(msgId, { answered: true });
+    setPromptOnlyMode(false);
+    setCustomTotalDuration(null);
+    pushMsg({ sender: "user", kind: "text", text: "Durasi default" });
+    runConcepts(briefText);
+  }
+
+  function handleDurationCustom(msgId: string) {
+    updateMsg(msgId, { answered: true });
+    pushMsg({ sender: "user", kind: "text", text: "Custom durasi per 10 detik" });
+    pushMsg({
+      sender: "ai",
+      kind: "text",
+      text: "Oke — mode prompt-only (tanpa video). Ketik total durasi video yang kamu mau dalam detik, HARUS kelipatan 10 (contoh: 10, 20, 100, 120). Kalau bukan kelipatan 10, aku tolak.",
+    });
+    setPhase("duration-custom");
+  }
+
+  function handleCustomDurationSubmit() {
+    const raw = input.trim();
+    if (!raw) return;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 10 || n % 10 !== 0) {
+      setInput("");
+      pushMsg({ sender: "user", kind: "text", text: raw });
+      pushMsg({
+        sender: "ai",
+        kind: "text",
+        text: `"${raw}" bukan kelipatan 10 yang valid. Masukkan angka kelipatan 10 (minimal 10), contoh: 10, 20, 100, 120.`,
+      });
+      return;
+    }
+    setInput("");
+    setPromptOnlyMode(true);
+    setCustomTotalDuration(n);
+    pushMsg({ sender: "user", kind: "text", text: `${n} detik` });
+    pushMsg({
+      sender: "ai",
+      kind: "text",
+      text: `Siap — total ${n} detik = ${n / 10} klip @ 10 detik. Output akhir: prompt Bahasa Inggris per klip, tanpa generate video.`,
+    });
+    runConcepts(briefText);
   }
 
   // ─── Reference-video-link flow ───────────────────────────────────────────
@@ -558,7 +632,8 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
         concept: selectedConcept,
         userPrompt: briefText,
         qaAnswers: answers,
-        targetDuration: 30,
+        targetDuration: promptOnlyMode && customTotalDuration ? customTotalDuration : 30,
+        clipDurationSec: promptOnlyMode ? 10 : undefined,
         referenceProfile: referenceProfileRef.current || undefined,
         apiKey,
       });
@@ -586,10 +661,18 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
         aspectRatio: "9:16",
         voice: selectedConcept.recommendedVoice || "Zephyr",
         bgmId: selectedConcept.recommendedBgm || "bsl1",
+        clipDurationSec: promptOnlyMode ? 10 : undefined,
         apiKey,
       });
       removeMsg(loadingId);
-      pushMsg({ sender: "ai", kind: "storyboard", refinedData: data.refinedData, text: "Nih hasilnya! Prompt video Bahasa Inggris siap generate, konsisten karakter & gaya visualnya di semua klip." });
+      pushMsg({
+        sender: "ai",
+        kind: "storyboard",
+        refinedData: data.refinedData,
+        text: promptOnlyMode
+          ? "Nih hasilnya! Prompt Bahasa Inggris per klip 10 detik — tinggal salin. (Mode prompt-only, tanpa generate video.)"
+          : "Nih hasilnya! Prompt video Bahasa Inggris siap generate, konsisten karakter & gaya visualnya di semua klip.",
+      });
       setPhase("done");
     } catch (err: any) {
       removeMsg(loadingId);
@@ -695,6 +778,7 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
   function handleSend() {
     if (phase === "brief" && pendingImages.length > 0) handleSendImages();
     else if (phase === "brief") handleSendBrief();
+    else if (phase === "duration-custom") handleCustomDurationSubmit();
     else if (phase === "qa-custom") handleCustomQASubmit();
   }
 
@@ -722,6 +806,9 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
             msg={msg}
             quality={quality}
             setQuality={setQuality}
+            promptOnly={promptOnlyMode}
+            onDurationDefault={handleDurationDefault}
+            onDurationCustom={handleDurationCustom}
             onPickConcept={handlePickConcept}
             onQAAnswer={handleQAAnswer}
             onQASkip={handleQASkip}
@@ -791,26 +878,30 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              disabled={phase !== "brief" && phase !== "qa-custom" && phase !== "image-clarify"}
+              disabled={phase !== "brief" && phase !== "qa-custom" && phase !== "image-clarify" && phase !== "duration-custom"}
               placeholder={
                 phase === "brief" && pendingImages.length > 0
                   ? "Tambahin konteks (opsional), lalu kirim..."
                   : phase === "brief"
                   ? "Contoh: kerja remote dari kafe, buat YouTube Shorts... (atau upload foto pakai +, atau tempel link video YouTube/IG/TikTok)"
+                  : phase === "duration-custom"
+                  ? "Total durasi dalam detik, kelipatan 10 (contoh: 20, 100, 120)..."
                   : phase === "qa-custom"
                   ? "Tulis jawabanmu sendiri..."
                   : phase === "image-clarify"
                   ? "Jawab pertanyaan di atas, lalu klik Lanjut"
                   : "Klik salah satu opsi di atas untuk lanjut"
               }
+              inputMode={phase === "duration-custom" ? "numeric" : "text"}
               className="flex-1 text-sm p-3 rounded-2xl bg-slate-950 border border-slate-700 text-white placeholder-slate-500 focus:border-purple-500 outline-none disabled:opacity-50"
             />
             <button
               type="submit"
               disabled={
-                (phase !== "brief" && phase !== "qa-custom") ||
+                (phase !== "brief" && phase !== "qa-custom" && phase !== "duration-custom") ||
                 (phase === "brief" && pendingImages.length === 0 && !input.trim()) ||
-                (phase === "qa-custom" && !input.trim())
+                (phase === "qa-custom" && !input.trim()) ||
+                (phase === "duration-custom" && !input.trim())
               }
               className="p-3 bg-gradient-to-r from-purple-600 to-indigo-600 disabled:opacity-40 text-white rounded-2xl shadow"
             >
@@ -828,6 +919,9 @@ function ChatBubble({
   msg,
   quality,
   setQuality,
+  promptOnly,
+  onDurationDefault,
+  onDurationCustom,
   onPickConcept,
   onQAAnswer,
   onQASkip,
@@ -846,6 +940,9 @@ function ChatBubble({
   msg: ChatMsg;
   quality: VeoQuality;
   setQuality: (q: VeoQuality) => void;
+  promptOnly: boolean;
+  onDurationDefault: (msgId: string) => void;
+  onDurationCustom: (msgId: string) => void;
   onPickConcept: (c: Concept) => void;
   onQAAnswer: (msgId: string, key: string, value: string) => void;
   onQASkip: (msgId: string, key: string) => void;
@@ -899,6 +996,25 @@ function ChatBubble({
           </div>
         )}
 
+        {msg.kind === "duration-choice" && (
+          <div className="mt-2.5 flex flex-wrap gap-1.5">
+            <button
+              disabled={msg.answered}
+              onClick={() => onDurationDefault(msg.id)}
+              className="text-xs font-bold px-3 py-1.5 rounded-xl border border-slate-700 bg-slate-950 text-slate-200 hover:border-purple-500 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Durasi default
+            </button>
+            <button
+              disabled={msg.answered}
+              onClick={() => onDurationCustom(msg.id)}
+              className="text-xs font-bold px-3 py-1.5 rounded-xl border border-purple-500/40 bg-purple-500/10 text-purple-200 hover:border-purple-500 hover:text-white disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Custom durasi per 10 detik (prompt saja)
+            </button>
+          </div>
+        )}
+
         {msg.kind === "quick-replies" && msg.qaKey && (
           <div className="mt-2.5 flex flex-wrap gap-1.5">
             {[...(msg.qaOptions || []), CUSTOM_OPTION].map((opt) => (
@@ -930,7 +1046,7 @@ function ChatBubble({
         )}
 
         {msg.kind === "storyboard" && msg.refinedData && (
-          <StoryboardResult data={msg.refinedData} msgId={msg.id} quality={quality} setQuality={setQuality} onGenerateScene={onGenerateScene} onGenerateAll={onGenerateAll} onSendToKlipAI={onSendToKlipAI} />
+          <StoryboardResult data={msg.refinedData} msgId={msg.id} quality={quality} setQuality={setQuality} promptOnly={promptOnly} onGenerateScene={onGenerateScene} onGenerateAll={onGenerateAll} onSendToKlipAI={onSendToKlipAI} />
         )}
 
         {msg.kind === "user-images" && msg.images && (
@@ -1258,6 +1374,40 @@ function CopyPromptButton({ text }: { text: string }) {
   );
 }
 
+function CopyAllPromptsButton({ scenes }: { scenes: Scene[] }) {
+  const [copied, setCopied] = useState(false);
+  const combined = scenes
+    .map((s) => `# Klip ${s.sceneNumber} (${s.duration || 10}s)\n${s.visualPrompt}`)
+    .join("\n\n");
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(combined);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = combined;
+      ta.style.position = "fixed";
+      ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch { /* give up silently */ }
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="mt-1 inline-flex items-center gap-1.5 text-[11px] font-black px-3 py-1.5 rounded-lg bg-amber-500/20 border border-amber-500/40 text-amber-100 hover:bg-amber-500/30 transition-all"
+    >
+      {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+      {copied ? "Tersalin!" : "Salin semua prompt"}
+    </button>
+  );
+}
+
 function ImageStoryboardGrid({ data, onConfirm }: { data: ImageStoryboardData; onConfirm: () => void }) {
   const [confirmed, setConfirmed] = useState(false);
   const okShots = data.shots.filter((s) => s.imageUrl);
@@ -1369,6 +1519,7 @@ function StoryboardResult({
   msgId,
   quality,
   setQuality,
+  promptOnly,
   onGenerateScene,
   onGenerateAll,
   onSendToKlipAI,
@@ -1377,6 +1528,7 @@ function StoryboardResult({
   msgId: string;
   quality: VeoQuality;
   setQuality: (q: VeoQuality) => void;
+  promptOnly: boolean;
   onGenerateScene: (msgId: string, sceneNumber: number) => void;
   onGenerateAll: (msgId: string) => void;
   onSendToKlipAI?: (projectData: any) => void | Promise<void>;
@@ -1450,7 +1602,15 @@ function StoryboardResult({
         </div>
       )}
 
-      {pendingCount > 0 && (
+      {promptOnly && (
+        <div className="text-xs bg-amber-500/10 rounded-xl p-3 border border-amber-500/30 text-amber-200 space-y-1">
+          <p className="font-black">📝 Mode prompt-only — {data.scenes.length} klip @ 10 detik</p>
+          <p className="text-amber-200/80">Output final: prompt Bahasa Inggris per klip. Tidak ada generate video, edit, atau download di mode ini.</p>
+          <CopyAllPromptsButton scenes={data.scenes} />
+        </div>
+      )}
+
+      {!promptOnly && pendingCount > 0 && (
         <button
           onClick={async () => {
             setIsGeneratingAll(true);
@@ -1473,7 +1633,7 @@ function StoryboardResult({
           )}
         </button>
       )}
-      {pendingCount > 1 && (
+      {!promptOnly && pendingCount > 1 && (
         <p className="text-[10px] text-slate-500 -mt-1.5">
           Klip dimulai satu-satu dengan jeda ~30 detik (batas rate-limit Google untuk Veo), bukan langsung bareng — supaya nggak kena error 429.
         </p>
@@ -1485,13 +1645,13 @@ function StoryboardResult({
             <div className="flex items-center justify-between">
               <span className="text-xs font-black text-purple-300">Klip {sc.sceneNumber} — {sc.duration}s</span>
             </div>
-            <p className="text-xs text-slate-400">{sc.voiceoverText}</p>
+            {!promptOnly && sc.voiceoverText && <p className="text-xs text-slate-400">{sc.voiceoverText}</p>}
             <div className="relative">
               <pre className="text-[10px] text-slate-300 whitespace-pre-wrap bg-slate-900 p-2 pr-8 rounded-lg border border-slate-800 font-mono">{sc.visualPrompt}</pre>
               <CopyPromptButton text={sc.visualPrompt} />
             </div>
 
-            {(!sc.veoStatus) && (
+            {!promptOnly && (!sc.veoStatus) && (
               <button
                 onClick={() => onGenerateScene(msgId, sc.sceneNumber)}
                 className="text-xs font-bold px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-black"
@@ -1499,16 +1659,16 @@ function StoryboardResult({
                 🎬 Generate Video (${(sc.duration * QUALITY_PRICE_PER_SEC[quality]).toFixed(2)})
               </button>
             )}
-            {sc.veoStatus === "generating" && (
+            {!promptOnly && sc.veoStatus === "generating" && (
               <p className="text-xs text-indigo-400 font-bold animate-pulse">Generating... bisa sampai beberapa menit.</p>
             )}
-            {sc.veoStatus === "error" && (
+            {!promptOnly && sc.veoStatus === "error" && (
               <div className="space-y-1.5">
                 <p className="text-xs text-red-400 font-bold">{sc.veoError}</p>
                 <button onClick={() => onGenerateScene(msgId, sc.sceneNumber)} className="text-xs font-bold px-3 py-1.5 rounded-xl bg-slate-800 text-slate-300">Coba lagi</button>
               </div>
             )}
-            {sc.veoStatus === "done" && sc.videoUrl && (
+            {!promptOnly && sc.veoStatus === "done" && sc.videoUrl && (
               <div className="space-y-1.5">
                 <video src={sc.videoUrl} controls className="w-full rounded-lg max-h-72 bg-black" />
                 <a href={sc.videoUrl} download className="text-xs font-bold text-purple-400">⬇ Download</a>
@@ -1518,19 +1678,21 @@ function StoryboardResult({
         ))}
       </div>
 
-      <div className="flex items-center justify-between gap-2 pt-1">
-        <div className="flex items-center gap-1.5">
-          <label className="text-[10px] font-bold text-slate-400">Kualitas:</label>
-          <select value={quality} onChange={(e) => setQuality(e.target.value as VeoQuality)} className="text-[10px] font-bold rounded-lg bg-slate-950 border border-slate-700 px-1.5 py-1">
-            {(Object.keys(QUALITY_LABELS) as VeoQuality[]).map((q) => (
-              <option key={q} value={q}>{QUALITY_LABELS[q]}</option>
-            ))}
-          </select>
+      {!promptOnly && (
+        <div className="flex items-center justify-between gap-2 pt-1">
+          <div className="flex items-center gap-1.5">
+            <label className="text-[10px] font-bold text-slate-400">Kualitas:</label>
+            <select value={quality} onChange={(e) => setQuality(e.target.value as VeoQuality)} className="text-[10px] font-bold rounded-lg bg-slate-950 border border-slate-700 px-1.5 py-1">
+              {(Object.keys(QUALITY_LABELS) as VeoQuality[]).map((q) => (
+                <option key={q} value={q}>{QUALITY_LABELS[q]}</option>
+              ))}
+            </select>
+          </div>
+          <span className="text-[10px] text-slate-500">Total kalau generate semua: <strong className="text-amber-400">${totalCost.toFixed(2)}</strong></span>
         </div>
-        <span className="text-[10px] text-slate-500">Total kalau generate semua: <strong className="text-amber-400">${totalCost.toFixed(2)}</strong></span>
-      </div>
+      )}
 
-      {allDone && (
+      {!promptOnly && allDone && (
         <div className="pt-1 border-t border-slate-800 space-y-2">
           {mergedUrl ? (
             <div className="space-y-1.5">
@@ -1557,7 +1719,7 @@ function StoryboardResult({
         </div>
       )}
 
-      {onSendToKlipAI && (
+      {!promptOnly && onSendToKlipAI && (
         <div className="pt-1 border-t border-slate-800">
           <button
             onClick={handleSend}
