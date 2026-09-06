@@ -4,6 +4,7 @@ import { stat } from "fs/promises";
 import { Readable } from "stream";
 import path from "path";
 import { getVeoJob, OUTPUT_DIR } from "@/lib/veoQueue";
+import { auth } from "@/lib/auth";
 
 // Streams a generated Veo clip from disk with Range support (needed for
 // <video> seeking/scrubbing). Deliberately a dynamic route rather than a
@@ -18,8 +19,9 @@ export async function GET(
     return Response.json({ error: "Invalid job id" }, { status: 400 });
   }
 
+  const session = await auth();
   const job = await getVeoJob(jobId);
-  if (!job || job.status !== "done") {
+  if (!job || job.status !== "done" || job.userId !== session?.user?.id) {
     return Response.json({ error: "Video not found or not ready" }, { status: 404 });
   }
 

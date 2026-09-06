@@ -1,0 +1,112 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// --- Auth.js (NextAuth v5) required models ---
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  accounts      Account[]
+  sessions      Session[]
+
+  // --- Commercialization: credit ledger ---
+  promptCreditsBalance      Int      @default(0) // poin, purchased/package-granted only
+  freeCreditsRemainingToday Int      @default(0) // poin
+  lastFreeGrantDate         String? // "YYYY-MM-DD" in Asia/Jakarta
+  videoCreditsBalance       Int      @default(0) // poin, package-granted only
+  hasVideoPackage           Boolean  @default(false)
+  isAdmin                   Boolean  @default(false)
+  createdAt                 DateTime @default(now())
+
+  orders       Order[]
+  transactions CreditTransaction[]
+  videoJobs    VideoJobOwner[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// --- Commercialization: payments & credits ---
+
+model Order {
+  id           String    @id // Midtrans order_id
+  userId       String
+  kind         String // "topup" | "package999k"
+  amountRupiah Int
+  status       String    @default("pending") // pending|settlement|failed|expired
+  createdAt    DateTime  @default(now())
+  settledAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+model CreditTransaction {
+  id             String   @id @default(cuid())
+  userId         String
+  type           String // topup_prompt|package999k|daily_free_grant|mode_a_charge|mode_b_flat_charge|video_generation_charge|video_generation_refund
+  pool           String // "prompt" | "video"
+  amount         Int // signed poin delta
+  balanceAfter   Int
+  relatedOrderId String?
+  relatedJobId   String?
+  createdAt      DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+// Maps a veoQueue.ts jobId to its owner + amount charged, so the in-memory
+// job queue (unchanged data model) can be reconciled/refunded without
+// storing relational data inside veoQueue.ts itself.
+model VideoJobOwner {
+  jobId       String   @id
+  userId      String
+  poinCharged Int
+  refunded    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}

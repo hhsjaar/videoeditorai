@@ -1925,7 +1925,7 @@ export default function CapCutWebStudio() {
       {/* FEATURE 2: VIDEO AI (GEMINI ENGINE) */}
       {activeAppTab === "video-ai" && (
         <div className="flex-1 overflow-y-auto">
-          <VideoAIChat apiKey={apiKey} onSendToKlipAI={handleSendFromVideoAIToKlipAI} />
+          <VideoAIChat apiKey={apiKey} />
         </div>
       )}
 

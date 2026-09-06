@@ -22,6 +22,7 @@ import { fal } from "@fal-ai/client";
 import { loadPersistedJobs, persistJobs } from "./jobPersistence";
 import { QUALITY_TO_MODEL, providerForQuality, type VeoQuality } from "./veoPricing";
 import { getCachedFfmpeg } from "./renderQueue";
+import { refundVideoCredits } from "./credits";
 
 const execAsync = promisify(exec);
 
@@ -39,6 +40,7 @@ export type VeoJobStatus = "pending" | "generating" | "done" | "error";
 
 export interface VeoJobState {
   jobId: string;
+  userId: string;
   status: VeoJobStatus;
   prompt: string;
   quality: VeoQuality;
@@ -82,6 +84,9 @@ async function restoreFromDisk() {
       job.status = "error";
       job.error = "Proses generate terputus karena server restart — silakan generate ulang.";
       job.finishedAt = Date.now();
+      refundVideoCredits(job.jobId).catch((refundErr) =>
+        console.error(`[veoQueue] Failed to refund credits for ${job.jobId}:`, refundErr)
+      );
     }
   }
   scheduleSave();
@@ -103,6 +108,7 @@ export async function getVeoJob(jobId: string): Promise<VeoJobState | undefined>
 
 export function enqueueVeoJob(params: {
   jobId: string;
+  userId: string;
   prompt: string;
   quality: VeoQuality;
   durationSeconds: number;
@@ -114,6 +120,7 @@ export function enqueueVeoJob(params: {
 }): VeoJobState {
   const state: VeoJobState = {
     jobId: params.jobId,
+    userId: params.userId,
     status: "pending",
     prompt: params.prompt,
     quality: params.quality,
@@ -433,6 +440,10 @@ async function runJob(job: VeoJobState) {
     job.finishedAt = Date.now();
     scheduleSave();
     console.error(`[veoQueue] Job failed: ${job.jobId}`, err?.message);
+    // Give back the poin charged at enqueue time — no video was produced.
+    refundVideoCredits(job.jobId).catch((refundErr) =>
+      console.error(`[veoQueue] Failed to refund credits for ${job.jobId}:`, refundErr)
+    );
   }
 }
 

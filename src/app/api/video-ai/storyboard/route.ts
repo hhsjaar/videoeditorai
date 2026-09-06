@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { GoogleGenAI } from "@google/genai";
 
 // Two clip-granularity modes:
-//  - default: Veo-legal 4/6/8s clips (video will actually be generated)
+//  - default: Kling-legal 5/10s clips (video will actually be generated)
 //  - per10  : fixed 10s clips for the prompt-only scripting mode (no video)
 function buildRowSchema(per10: boolean) {
   return {
@@ -11,7 +11,7 @@ function buildRowSchema(per10: boolean) {
       id: { type: "string", description: "Nomor urut baris/klip, contoh '1', '2', '3'" },
       durationSec: per10
         ? { type: "integer", enum: [10], description: "Durasi klip ini WAJIB tepat 10 detik — mode ini mengelompokkan naskah per 10 detik" }
-        : { type: "integer", enum: [4, 6, 8], description: "Durasi klip ini dalam detik — HARUS salah satu dari 4, 6, atau 8 (batasan teknis AI video engine, TIDAK BOLEH nilai lain seperti 5 atau 10)" },
+        : { type: "integer", enum: [5, 10], description: "Durasi klip ini dalam detik — HARUS salah satu dari 5 atau 10 (batasan teknis AI video engine, TIDAK BOLEH nilai lain)" },
       startSec: { type: "integer", description: "Detik mulai klip ini relatif ke keseluruhan video (kumulatif dari durasi klip-klip sebelumnya)" },
       endSec: { type: "integer", description: "startSec + durationSec" },
       visual: {
@@ -62,7 +62,7 @@ function buildResponseSchema(per10: boolean) {
         items: buildRowSchema(per10),
         description: per10
           ? "Baris-baris storyboard — tiap baris adalah SATU klip berdurasi tepat 10 detik"
-          : "Baris-baris storyboard — tiap baris adalah SATU klip AI video yang berdiri sendiri, durasinya langsung salah satu dari 4/6/8 detik",
+          : "Baris-baris storyboard — tiap baris adalah SATU klip AI video yang berdiri sendiri, durasinya langsung salah satu dari 5/10 detik",
       },
     },
     required: ["videoTitle", "concept30s", "consistencyProfile", "rows"],
@@ -96,7 +96,7 @@ export async function POST(req: NextRequest) {
 
     const numRows = per10
       ? Math.max(1, Math.round(targetDuration / 10))
-      : Math.max(3, Math.round(targetDuration / 6));
+      : Math.max(3, Math.round(targetDuration / 7));
 
     const referenceText = referenceProfile
       ? `\nREFERENSI GAYA (WAJIB DIIKUTI — video ini adalah remake/terinspirasi dari video lain, consistencyProfile HARUS mencerminkan gaya referensi ini, bukan gaya generik):
@@ -127,7 +127,7 @@ Aturan WAJIB:
 5. "emotion" singkat, 2-4 kata, sesuai momen di baris itu.
 6. ${per10
   ? `"durationSec" tiap baris HARUS tepat 10 detik. Jumlah baris HARUS tepat ${numRows} sehingga total = ${targetDuration} detik.`
-  : `"durationSec" tiap baris HARUS salah satu dari 4, 6, atau 8 detik — TIDAK BOLEH nilai lain (bukan 5, bukan 10). DEFAULT ke 6 detik untuk sebagian besar baris (lebih lega buat narasi & gerakan kamera), pakai 4 detik hanya untuk beat cepat/transisi singkat, dan 8 detik hanya untuk momen yang butuh napas lebih panjang. Total durasi semua baris harus mendekati ${targetDuration} detik.`}
+  : `"durationSec" tiap baris HARUS salah satu dari 5 atau 10 detik — TIDAK BOLEH nilai lain. DEFAULT ke 5 detik untuk beat singkat, pakai 10 detik untuk momen yang butuh napas lebih panjang atau narasi lebih padat. Total durasi semua baris harus mendekati ${targetDuration} detik.`}
 7. "startSec" dan "endSec" HARUS kumulatif akurat: baris pertama startSec=0, baris berikutnya startSec = endSec baris sebelumnya, dan endSec = startSec + durationSec.
 8. PALING PENTING: panjang "narration" tiap baris harus PAS kalau diucapkan dalam durationSec baris itu (kecepatan bicara natural ~2.5-3 kata/detik) — ${per10 ? "baris 10 detik idealnya sekitar 25-30 kata" : "misal baris 6 detik idealnya sekitar 15-18 kata"}. JANGAN menulis narasi yang lebih panjang dari itu, karena nanti suaranya akan kepotong di video hasil generate. Lebih baik narasi sedikit lebih pendek/ada jeda natural daripada kepanjangan.${referenceProfile ? "\n9. WAJIB: consistencyProfile.visualStyle, environment, dan cameraLanguage harus benar-benar mencerminkan REFERENSI GAYA di atas (bukan gaya bebas/generik) — ini video remake, jadi harus kelihatan senada dengan video aslinya." : ""}`;
 

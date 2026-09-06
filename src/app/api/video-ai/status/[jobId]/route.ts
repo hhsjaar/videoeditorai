@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getVeoJob } from "@/lib/veoQueue";
+import { auth } from "@/lib/auth";
 
 export async function GET(
   _req: NextRequest,
@@ -11,8 +12,9 @@ export async function GET(
     return NextResponse.json({ error: "Missing jobId" }, { status: 400 });
   }
 
+  const session = await auth();
   const job = await getVeoJob(jobId);
-  if (!job) {
+  if (!job || job.userId !== session?.user?.id) {
     return NextResponse.json({ error: "Job not found" }, { status: 404 });
   }
 

@@ -54,3 +54,5 @@ tmp/render-output/
 # Video AI generated output (server-local, regenerated on demand)
 /public/veo-output/
 /public/generated-ai/
+
+/src/generated/prisma

@@ -1,12 +1,14 @@
 "use client";
 
 import React from "react";
+import { signOut } from "next-auth/react";
 import {
-  Film,
   Sparkles,
   Layers,
   Wand2,
+  LogOut,
 } from "lucide-react";
+import { CreditBadge } from "./CreditBadge";
 
 export type ActiveTabType = "klip-ai" | "video-ai" | "animasi-ai";
 
@@ -43,22 +45,8 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
 
-        {/* 3 Main Feature Tabs */}
+        {/* 2 Main Feature Tabs — Studio Workspace (Klip AI) is disabled in the commercial build */}
         <nav className="flex items-center gap-1 rounded-2xl bg-slate-900/90 p-1.5 border border-slate-800/80 shadow-inner">
-          {/* Tab 1: Klip AI */}
-          <button
-            id="tab-klip-ai"
-            onClick={() => onTabChange("klip-ai")}
-            className={`flex items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-semibold transition-all sm:text-sm ${
-              activeTab === "klip-ai"
-                ? "bg-gradient-to-r from-indigo-600 to-blue-600 text-white shadow-md shadow-indigo-600/30 font-bold"
-                : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-200"
-            }`}
-          >
-            <Film className="h-4 w-4" />
-            <span>Klip AI</span>
-          </button>
-
           {/* Tab 2: Video AI */}
           <button
             id="tab-video-ai"
@@ -94,6 +82,17 @@ export const Navbar: React.FC<NavbarProps> = ({
             </span>
           </button>
         </nav>
+
+        <div className="flex items-center gap-2">
+          <CreditBadge />
+          <button
+            onClick={() => signOut({ redirectTo: "/login" })}
+            className="flex items-center gap-1.5 rounded-xl border border-slate-800/80 bg-slate-900/90 px-2.5 py-1.5 text-xs font-semibold text-slate-400 transition hover:border-red-500/40 hover:text-red-300"
+            title="Keluar"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
     </header>
   );

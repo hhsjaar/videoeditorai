@@ -3,45 +3,41 @@ import fs from "fs";
 import path from "path";
 import { writeFile, mkdir } from "fs/promises";
 import { randomUUID } from "crypto";
-import { enqueueVeoJob, type VeoQuality } from "@/lib/veoQueue";
+import { enqueueVeoJob } from "@/lib/veoQueue";
+import { auth } from "@/lib/auth";
+import { chargeVideoCredits, getBalances, InsufficientCreditsError } from "@/lib/credits";
 
-const VALID_QUALITIES: VeoQuality[] = ["lite", "fast", "standard", "kling"];
-const VALID_DURATIONS = [4, 6, 8];
 const VALID_KLING_DURATIONS = [5, 10];
 
 // Rounds UP to the nearest provider-legal duration (never down) — a clip
 // shorter than its narration's actual length would chop the voiceover off
-// mid-word. Veo allows 4/6/8s; Kling (fal.ai) only allows 5/10s.
-function clampToVeoDuration(requested: number): 4 | 6 | 8 {
-  return (VALID_DURATIONS.find((v) => v >= requested) ?? 8) as 4 | 6 | 8;
-}
+// mid-word. This commercial build only ever generates on Kling (5/10s).
 function clampToKlingDuration(requested: number): 5 | 10 {
   return (VALID_KLING_DURATIONS.find((v) => v >= requested) ?? 10) as 5 | 10;
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const {
-      refinedData,
-      generationMode = "veo-video", // 'storyboard-motion' (image-only preview) or 'veo-video' (real Veo generation)
-      quality = "lite",
-      apiKey,
-    } = await req.json();
+    const session = await auth();
+    if (!session?.user?.id) {
+      return NextResponse.json({ error: "Silakan login dulu." }, { status: 401 });
+    }
+    const userId = session.user.id;
 
-    const veoQuality: VeoQuality = VALID_QUALITIES.includes(quality) ? quality : "lite";
+    const { hasVideoPackage } = await getBalances(userId);
+    if (!hasVideoPackage) {
+      return NextResponse.json(
+        { error: "Fitur generate video butuh paket Rp999.000.", code: "NEEDS_PACKAGE" },
+        { status: 403 }
+      );
+    }
 
-    if (veoQuality === "kling") {
-      if (!process.env.FAL_KEY) {
-        return NextResponse.json({ error: "API Key fal.ai (FAL_KEY) belum dikonfigurasi di server." }, { status: 400 });
-      }
-    } else {
-      const activeApiKey = apiKey || process.env.GEMINI_API_KEY;
-      if (!activeApiKey) {
-        return NextResponse.json(
-          { error: "API Key Google Gemini belum dikonfigurasi." },
-          { status: 400 }
-        );
-      }
+    const { refinedData, generationMode = "veo-video" } = await req.json();
+
+    // This commercial build always renders on Kling — the client never
+    // chooses a provider, and any client-sent value is ignored here too.
+    if (!process.env.FAL_KEY) {
+      return NextResponse.json({ error: "API Key fal.ai (FAL_KEY) belum dikonfigurasi di server." }, { status: 400 });
     }
 
     if (!refinedData || !refinedData.scenes || refinedData.scenes.length === 0) {
@@ -52,6 +48,20 @@ export async function POST(req: NextRequest) {
     }
 
     const scenes = refinedData.scenes;
+
+    // Pre-check the whole batch's cost against the balance before enqueueing
+    // anything — cheaper to fail the whole request up front than to enqueue
+    // some scenes and then run out of balance partway through the loop.
+    if (generationMode === "veo-video") {
+      const totalNeeded = scenes.reduce((acc: number, sc: any) => acc + clampToKlingDuration(sc.duration || 5), 0);
+      const { videoCreditsBalance } = await getBalances(userId);
+      if (videoCreditsBalance < totalNeeded) {
+        return NextResponse.json(
+          { error: `Kredit video tidak cukup (butuh ${totalNeeded}, tersisa ${videoCreditsBalance}).`, code: "INSUFFICIENT_CREDITS" },
+          { status: 402 }
+        );
+      }
+    }
 
     // Ensure public output dir exists for generated assets
     const publicGenDir = path.join(process.cwd(), "public", "generated-ai");
@@ -131,28 +141,55 @@ export async function POST(req: NextRequest) {
         visualUrl = `/generated-ai/${svgFilename}`;
       }
 
-      // Kick off REAL Veo video generation for this scene (async — don't await).
+      // Kick off REAL video generation for this scene (async — don't await).
       // The placeholder visualUrl above covers the player while this is in flight.
+      // Always Kling — this commercial build never exposes Veo to end users.
       let veoJobId: string | null = null;
-      let veoStatus: "generating" | "skipped" = "skipped";
+      let veoStatus: "generating" | "skipped" | "error" = "skipped";
       if (generationMode === "veo-video") {
         veoJobId = randomUUID();
         veoStatus = "generating";
+        const durationSeconds = clampToKlingDuration(sc.duration || 5);
+
+        try {
+          await chargeVideoCredits(userId, durationSeconds, veoJobId, "video_generation_charge");
+        } catch (err: any) {
+          if (err instanceof InsufficientCreditsError) {
+            generatedScenes.push({
+              id: `scene-${i + 1}`,
+              sceneNumber: i + 1,
+              duration: sc.duration || 5,
+              visualUrl,
+              visualPrompt,
+              voiceoverText: sc.voiceoverText || "",
+              cameraMotion: sc.cameraMotion || "zoom-in",
+              transition: sc.transition || "light-leak",
+              overlayTitle: sc.overlayTitle || "",
+              veoJobId: null,
+              veoStatus: "error",
+              veoError: "Kredit video tidak cukup.",
+              videoUrl: null as string | null,
+            });
+            continue;
+          }
+          throw err;
+        }
+
         enqueueVeoJob({
           jobId: veoJobId,
+          userId,
           prompt: visualPrompt,
-          quality: veoQuality,
-          durationSeconds: veoQuality === "kling" ? clampToKlingDuration(sc.duration || 5) : clampToVeoDuration(sc.duration || 8),
+          quality: "kling",
+          durationSeconds,
           aspectRatio: refinedData.aspectRatio === "16:9" ? "16:9" : "9:16",
           // When this scene came from an uploaded/storyboard reference image,
-          // Veo animates FROM that photo instead of imagining it from text —
+          // Kling animates FROM that photo instead of imagining it from text —
           // keeps real places/products faithful instead of hallucinated.
           imageBytes: sc.sourceImageBase64 || undefined,
           imageMimeType: sc.sourceImageMimeType || undefined,
           // Kling has no native audio — narration gets generated separately
-          // via TTS and muxed in (see veoQueue.ts). Unused for Veo, which
-          // already speaks its dialogue baked into visualPrompt/prompt.
-          voiceoverText: veoQuality === "kling" ? (sc.voiceoverText || undefined) : undefined,
+          // via TTS and muxed in (see veoQueue.ts).
+          voiceoverText: sc.voiceoverText || undefined,
           voiceName: refinedData.voice || undefined,
         });
       }

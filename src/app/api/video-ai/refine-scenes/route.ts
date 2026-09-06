@@ -9,7 +9,7 @@ function buildSceneSchema(per10: boolean) {
       sceneNumber: { type: "integer" },
       duration: per10
         ? { type: "integer", enum: [10], description: "Durasi scene WAJIB tepat 10 detik (mode scripting prompt per 10 detik)" }
-        : { type: "integer", enum: [4, 6, 8], description: "Durasi scene dalam detik — HARUS salah satu dari 4, 6, atau 8 (batasan AI video engine)" },
+        : { type: "integer", enum: [5, 10], description: "Durasi scene dalam detik — HARUS salah satu dari 5 atau 10 (batasan AI video engine)" },
       visualPrompt: {
         type: "string",
         description:
@@ -34,11 +34,11 @@ function buildResponseSchema(per10: boolean) {
   };
 }
 
-// Rounds UP to the nearest Veo-legal duration (never down) — a clip shorter
+// Rounds UP to the nearest Kling-legal duration (never down) — a clip shorter
 // than its narration's actual length would chop the voiceover off mid-word.
-function clampToVeoDuration(requested: number): 4 | 6 | 8 {
-  const options: Array<4 | 6 | 8> = [4, 6, 8];
-  return options.find((v) => v >= requested) ?? 8;
+function clampToKlingDuration(requested: number): 5 | 10 {
+  const options: Array<5 | 10> = [5, 10];
+  return options.find((v) => v >= requested) ?? 10;
 }
 
 export async function POST(req: NextRequest) {
@@ -94,7 +94,7 @@ Aturan WAJIB untuk tiap "visualPrompt":
 5. Sertakan audio: dialog (kalau ada, kutip voiceoverText baris itu dalam Bahasa Indonesia APA ADANYA di dalam narasi audio — JANGAN diterjemahkan ke Inggris, sama seperti mode default), ambience lokasi, dan sound effect yang relevan.
 6. Jangan pakai nama orang asli/tokoh terkenal.
 7. "voiceoverText" HARUS sama persis dengan narasi baris storyboard sumbernya (jangan diubah).
-8. ${per10 ? '"duration" WAJIB tepat 10 detik untuk setiap scene. Tiap scene mewakili satu blok 10 detik penuh, jadi visualPrompt boleh memuat beberapa beat aksi yang mengalir dalam 10 detik itu.' : '"duration" harus salah satu dari 4, 6, atau 8 detik — pilih yang paling dekat dengan durasi baris storyboard sumbernya.'}
+8. ${per10 ? '"duration" WAJIB tepat 10 detik untuk setiap scene. Tiap scene mewakili satu blok 10 detik penuh, jadi visualPrompt boleh memuat beberapa beat aksi yang mengalir dalam 10 detik itu.' : '"duration" harus salah satu dari 5 atau 10 detik — pilih yang paling dekat dengan durasi baris storyboard sumbernya.'}
 9. Urutan "scenes" HARUS sama dengan urutan baris storyboard di atas, sceneNumber mulai dari 1${per10 ? ", jumlah scene HARUS sama dengan jumlah baris storyboard" : ""}.
 
 Aturan sinematografi tambahan (WAJIB, ini yang paling sering bikin hasil video AI kelihatan "kosong" secara emosional kalau dilewatkan):
@@ -130,7 +130,7 @@ ${CINEMATOGRAPHY_RULES}`;
     const scenes = (parsedData.scenes || []).map((sc: any, i: number) => ({
       ...sc,
       sceneNumber: i + 1,
-      duration: per10 ? 10 : clampToVeoDuration(sc.duration || 6),
+      duration: per10 ? 10 : clampToKlingDuration(sc.duration || 5),
     }));
 
     return NextResponse.json({

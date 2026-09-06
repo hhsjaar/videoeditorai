@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useEffect } from "react";
 import { Bot, Send, Loader2, Check, RefreshCw, Sparkles, Copy } from "lucide-react";
-import { QUALITY_PRICE_PER_SEC, QUALITY_LABELS, type VeoQuality } from "@/lib/veoPricing";
+import Link from "next/link";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 interface Concept {
@@ -146,7 +146,8 @@ interface ChatMsg {
     | "image-choice"
     | "image-storyboard-grid"
     | "image-clarify"
-    | "reference-analysis";
+    | "reference-analysis"
+    | "upsell-package";
   text?: string;
   keywords?: string[];
   concepts?: Concept[];
@@ -240,7 +241,6 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
   const [pendingCustomKey, setPendingCustomKey] = useState<string | null>(null);
   const [selectedConcept, setSelectedConcept] = useState<Concept | null>(null);
   const [briefText, setBriefText] = useState("");
-  const [quality, setQuality] = useState<VeoQuality>("lite");
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -324,11 +324,47 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
     }
   }
 
-  function handleDurationDefault(msgId: string) {
+  // Server-enforced credit gate — both modes charge poin before the ideation
+  // pipeline runs (see /api/credits/charge). Never trust a client-only check:
+  // the server independently re-validates the package/balance requirement.
+  async function chargeCredits(mode: "prompt-only" | "video", requestedTotalSeconds?: number) {
+    const res = await fetch("/api/credits/charge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode, requestedTotalSeconds }),
+    });
+    const data = await res.json();
+    if (!res.ok) return { ok: false as const, code: data.code as string | undefined, error: data.error as string };
+    return { ok: true as const };
+  }
+
+  async function handleDurationDefault(msgId: string) {
     updateMsg(msgId, { answered: true });
     setPromptOnlyMode(false);
     setCustomTotalDuration(null);
     pushMsg({ sender: "user", kind: "text", text: "Durasi default" });
+
+    const charge = await chargeCredits("video");
+    if (!charge.ok) {
+      if (charge.code === "NEEDS_PACKAGE") {
+        pushMsg({
+          sender: "ai",
+          kind: "text",
+          text: "Fitur generate video cuma bisa dipakai kalau kamu udah punya Paket Generate Video (Rp999.000). Paket ini juga sekalian dapat 100 menit kredit prompt.",
+        });
+        pushMsg({ sender: "ai", kind: "upsell-package", text: "" });
+      } else {
+        pushMsg({ sender: "ai", kind: "text", text: charge.error || "Kredit tidak cukup." });
+      }
+      // Both buttons on the original prompt got disabled once answered — give
+      // the user a fresh choice so a blocked "Durasi default" isn't a dead end.
+      pushMsg({
+        sender: "ai",
+        kind: "duration-choice",
+        text: "Mau lanjut pakai mode prompt-only (per 10 detik) aja, atau coba lagi nanti?",
+      });
+      return;
+    }
     runConcepts(briefText);
   }
 
@@ -343,7 +379,7 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
     setPhase("duration-custom");
   }
 
-  function handleCustomDurationSubmit() {
+  async function handleCustomDurationSubmit() {
     const raw = input.trim();
     if (!raw) return;
     const n = Number(raw);
@@ -358,13 +394,20 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
       return;
     }
     setInput("");
+    pushMsg({ sender: "user", kind: "text", text: `${n} detik` });
+
+    const charge = await chargeCredits("prompt-only", n);
+    if (!charge.ok) {
+      pushMsg({ sender: "ai", kind: "text", text: charge.error || `Kredit tidak cukup untuk ${n} detik.` });
+      return;
+    }
+
     setPromptOnlyMode(true);
     setCustomTotalDuration(n);
-    pushMsg({ sender: "user", kind: "text", text: `${n} detik` });
     pushMsg({
       sender: "ai",
       kind: "text",
-      text: `Siap — total ${n} detik = ${n / 10} klip @ 10 detik. Output akhir: prompt Bahasa Inggris per klip, tanpa generate video.`,
+      text: `Siap — total ${n} detik = ${n / 10} klip @ 10 detik (${n} poin kredit terpakai). Output akhir: prompt Bahasa Inggris per klip, tanpa generate video.`,
     });
     runConcepts(briefText);
   }
@@ -706,8 +749,6 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
         body: JSON.stringify({
           refinedData: { ...msg!.refinedData, scenes: [scene] },
           generationMode: "veo-video",
-          quality,
-          apiKey,
         }),
       });
       const data = await res.json();
@@ -804,8 +845,6 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
           <ChatBubble
             key={msg.id}
             msg={msg}
-            quality={quality}
-            setQuality={setQuality}
             promptOnly={promptOnlyMode}
             onDurationDefault={handleDurationDefault}
             onDurationCustom={handleDurationCustom}
@@ -917,8 +956,6 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
 // ─── Chat bubble renderer ───────────────────────────────────────────────────
 function ChatBubble({
   msg,
-  quality,
-  setQuality,
   promptOnly,
   onDurationDefault,
   onDurationCustom,
@@ -938,8 +975,6 @@ function ChatBubble({
   briefText,
 }: {
   msg: ChatMsg;
-  quality: VeoQuality;
-  setQuality: (q: VeoQuality) => void;
   promptOnly: boolean;
   onDurationDefault: (msgId: string) => void;
   onDurationCustom: (msgId: string) => void;
@@ -1015,6 +1050,17 @@ function ChatBubble({
           </div>
         )}
 
+        {msg.kind === "upsell-package" && (
+          <div className="mt-2.5 rounded-xl border border-purple-500/30 bg-purple-500/10 p-3">
+            <Link
+              href="/topup"
+              className="inline-block text-xs font-black px-3 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-pink-600 text-white"
+            >
+              🚀 Lihat Paket Generate Video (Rp999.000)
+            </Link>
+          </div>
+        )}
+
         {msg.kind === "quick-replies" && msg.qaKey && (
           <div className="mt-2.5 flex flex-wrap gap-1.5">
             {[...(msg.qaOptions || []), CUSTOM_OPTION].map((opt) => (
@@ -1046,7 +1092,7 @@ function ChatBubble({
         )}
 
         {msg.kind === "storyboard" && msg.refinedData && (
-          <StoryboardResult data={msg.refinedData} msgId={msg.id} quality={quality} setQuality={setQuality} promptOnly={promptOnly} onGenerateScene={onGenerateScene} onGenerateAll={onGenerateAll} onSendToKlipAI={onSendToKlipAI} />
+          <StoryboardResult data={msg.refinedData} msgId={msg.id} promptOnly={promptOnly} onGenerateScene={onGenerateScene} onGenerateAll={onGenerateAll} onSendToKlipAI={onSendToKlipAI} />
         )}
 
         {msg.kind === "user-images" && msg.images && (
@@ -1517,8 +1563,6 @@ function StoryboardIndoTable({ data, onConfirm }: { data: StoryboardIndoData; on
 function StoryboardResult({
   data,
   msgId,
-  quality,
-  setQuality,
   promptOnly,
   onGenerateScene,
   onGenerateAll,
@@ -1526,8 +1570,6 @@ function StoryboardResult({
 }: {
   data: RefinedData;
   msgId: string;
-  quality: VeoQuality;
-  setQuality: (q: VeoQuality) => void;
   promptOnly: boolean;
   onGenerateScene: (msgId: string, sceneNumber: number) => void;
   onGenerateAll: (msgId: string) => void;
@@ -1538,11 +1580,12 @@ function StoryboardResult({
   const [isMerging, setIsMerging] = useState(false);
   const [mergedUrl, setMergedUrl] = useState<string | null>(null);
   const [mergeError, setMergeError] = useState<string | null>(null);
-  const totalCost = data.scenes.reduce((acc, s) => acc + (s.duration || 8), 0) * QUALITY_PRICE_PER_SEC[quality];
+  // 1 poin kredit video = 1 detik hasil generate, jadi total poin = total detik.
+  const totalCost = data.scenes.reduce((acc, s) => acc + (s.duration || 8), 0);
   const doneCount = data.scenes.filter((s) => s.veoStatus === "done" && s.videoUrl).length;
   const pendingScenes = data.scenes.filter((s) => !s.veoStatus);
   const pendingCount = pendingScenes.length;
-  const pendingCost = pendingScenes.reduce((acc, s) => acc + (s.duration || 8), 0) * QUALITY_PRICE_PER_SEC[quality];
+  const pendingCost = pendingScenes.reduce((acc, s) => acc + (s.duration || 8), 0);
   const allDone = data.scenes.length > 0 && doneCount === data.scenes.length;
 
   async function handleMergeAll() {
@@ -1629,7 +1672,7 @@ function StoryboardResult({
               <span>Memulai klip satu-satu (~{Math.ceil((pendingCount * 32) / 60)} menit)...</span>
             </>
           ) : (
-            <span>🎬✨ Generate Semua Klip ({pendingCount}) — ${pendingCost.toFixed(2)}</span>
+            <span>🎬✨ Generate Semua Klip ({pendingCount}) — {pendingCost} poin</span>
           )}
         </button>
       )}
@@ -1656,7 +1699,7 @@ function StoryboardResult({
                 onClick={() => onGenerateScene(msgId, sc.sceneNumber)}
                 className="text-xs font-bold px-3 py-1.5 rounded-xl bg-gradient-to-r from-amber-500 to-orange-500 text-black"
               >
-                🎬 Generate Video (${(sc.duration * QUALITY_PRICE_PER_SEC[quality]).toFixed(2)})
+                🎬 Generate Video ({sc.duration} poin)
               </button>
             )}
             {!promptOnly && sc.veoStatus === "generating" && (
@@ -1679,16 +1722,8 @@ function StoryboardResult({
       </div>
 
       {!promptOnly && (
-        <div className="flex items-center justify-between gap-2 pt-1">
-          <div className="flex items-center gap-1.5">
-            <label className="text-[10px] font-bold text-slate-400">Kualitas:</label>
-            <select value={quality} onChange={(e) => setQuality(e.target.value as VeoQuality)} className="text-[10px] font-bold rounded-lg bg-slate-950 border border-slate-700 px-1.5 py-1">
-              {(Object.keys(QUALITY_LABELS) as VeoQuality[]).map((q) => (
-                <option key={q} value={q}>{QUALITY_LABELS[q]}</option>
-              ))}
-            </select>
-          </div>
-          <span className="text-[10px] text-slate-500">Total kalau generate semua: <strong className="text-amber-400">${totalCost.toFixed(2)}</strong></span>
+        <div className="flex items-center justify-end gap-2 pt-1">
+          <span className="text-[10px] text-slate-500">Total kalau generate semua: <strong className="text-amber-400">{totalCost} poin</strong></span>
         </div>
       )}
 
