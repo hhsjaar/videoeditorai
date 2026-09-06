@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { Bot, Send, Loader2, Check, RefreshCw, Sparkles, Copy } from "lucide-react";
 import Link from "next/link";
+import { useSession, signIn } from "next-auth/react";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 interface Concept {
@@ -147,7 +148,8 @@ interface ChatMsg {
     | "image-storyboard-grid"
     | "image-clarify"
     | "reference-analysis"
-    | "upsell-package";
+    | "upsell-package"
+    | "login-prompt";
   text?: string;
   keywords?: string[];
   concepts?: Concept[];
@@ -199,20 +201,47 @@ function compressImageFile(file: File, maxDim = 1280, quality = 0.85): Promise<{
   });
 }
 
+const GREETING_TEXT =
+  "Halo! 👋 Aku content strategist & sutradara AI kamu. Ceritain mau bikin video apa — topiknya apa, buat platform mana (Shorts/Reels/TikTok/YouTube), dan target penontonnya siapa. Boleh ditulis santai dalam satu kalimat aja.";
+
 interface VideoAIChatProps {
   apiKey?: string;
   onSendToKlipAI?: (projectData: any) => void | Promise<void>;
+  // Loading a saved thread from the history sidebar — pass its id + previously
+  // saved state; the parent remounts this component (via `key`) when switching
+  // threads, so this only needs to matter on first render.
+  sessionId?: string | null;
+  initialMessages?: ChatMsg[];
+  initialPromptOnlyMode?: boolean;
+  initialCustomTotalDuration?: number | null;
+  onSessionSaved?: (id: string, title: string) => void;
 }
 
-export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI }) => {
-  const [messages, setMessages] = useState<ChatMsg[]>([
-    {
-      id: nextId(),
-      sender: "ai",
-      kind: "text",
-      text: "Halo! 👋 Aku content strategist & sutradara AI kamu. Ceritain mau bikin video apa — topiknya apa, buat platform mana (Shorts/Reels/TikTok/YouTube), dan target penontonnya siapa. Boleh ditulis santai dalam satu kalimat aja.",
-    },
-  ]);
+// Where an interrupted (not-yet-logged-in) action gets stashed across the
+// Google OAuth redirect round-trip, so the user resumes right where they left
+// off instead of losing their brief and having to retype it.
+type PendingAction =
+  | { type: "duration-default" }
+  | { type: "duration-custom"; seconds: number };
+
+const PENDING_ACTION_KEY = "videoai_pending_action";
+
+export const VideoAIChat: React.FC<VideoAIChatProps> = ({
+  apiKey,
+  onSendToKlipAI,
+  sessionId: initialSessionId,
+  initialMessages,
+  initialPromptOnlyMode,
+  initialCustomTotalDuration,
+  onSessionSaved,
+}) => {
+  const { data: authSession } = useSession();
+  const [messages, setMessages] = useState<ChatMsg[]>(
+    initialMessages && initialMessages.length > 0
+      ? initialMessages
+      : [{ id: nextId(), sender: "ai", kind: "text", text: GREETING_TEXT }]
+  );
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(initialSessionId ?? null);
   const [input, setInput] = useState("");
   const [phase, setPhase] = useState<
     | "brief"
@@ -225,11 +254,15 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
     | "done"
     | "image-choice"
     | "image-clarify"
-  >("brief");
+    // A saved thread loaded from history — all the in-flight refs/QA state
+    // that made the original run work are gone, so it's a mostly-read view;
+    // "generate video"/"generate all" buttons still work since scene data is
+    // self-contained.
+  >(initialMessages && initialMessages.length > 0 ? "done" : "brief");
   // When true, the whole run is prompt-only: clips are grouped per 10s and the
   // final output is just English prompts — no video generate/merge/download.
-  const [promptOnlyMode, setPromptOnlyMode] = useState(false);
-  const [customTotalDuration, setCustomTotalDuration] = useState<number | null>(null);
+  const [promptOnlyMode, setPromptOnlyMode] = useState(initialPromptOnlyMode ?? false);
+  const [customTotalDuration, setCustomTotalDuration] = useState<number | null>(initialCustomTotalDuration ?? null);
   const [pendingImages, setPendingImages] = useState<UploadedRefImage[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingImageScenesRef = useRef<{ images: Array<{ base64: string; mimeType: string }> } | null>(null);
@@ -246,6 +279,105 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  // ─── Chat history: autosave + resume-after-login ─────────────────────────
+  // Only logged-in users get their threads saved — a guest's in-progress chat
+  // lives in React state only until they log in (see requireLogin below).
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!authSession?.user) return;
+    if (messagesRef.current.length <= 1) return; // nothing beyond the greeting yet
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(async () => {
+      const payload = { messages: messagesRef.current, promptOnlyMode, customTotalDuration };
+      try {
+        if (!currentSessionId) {
+          const firstUserMsg = messagesRef.current.find((m) => m.sender === "user" && m.text);
+          const title = firstUserMsg?.text?.slice(0, 60) || "Obrolan baru";
+          const res = await fetch("/api/chat-sessions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title, data: payload }),
+          });
+          const data = await res.json();
+          if (data.success) {
+            setCurrentSessionId(data.id);
+            onSessionSaved?.(data.id, title);
+          }
+        } else {
+          await fetch(`/api/chat-sessions/${currentSessionId}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ data: payload }),
+          });
+        }
+      } catch {
+        /* best-effort autosave — a failed save just tries again next change */
+      }
+    }, 1500);
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, authSession?.user, currentSessionId]);
+
+  // Gate for any action that costs credits or needs an identity: if the user
+  // isn't logged in yet, stash what they were trying to do and send them to
+  // Google — resumed automatically below once they're back with a session.
+  function requireLogin(pending: PendingAction): boolean {
+    if (authSession?.user) return true;
+    try {
+      sessionStorage.setItem(PENDING_ACTION_KEY, JSON.stringify({ briefText, pending }));
+    } catch {
+      /* sessionStorage unavailable (private mode etc.) — login still works, just won't auto-resume */
+    }
+    pushMsg({
+      sender: "ai",
+      kind: "login-prompt",
+      text: "Yuk masuk dulu pakai akun Google buat lanjut — obrolan ini bakal lanjut otomatis begitu kamu balik.",
+    });
+    return false;
+  }
+
+  // Simpler variant for flows that don't have a resume path built (link
+  // analysis, image upload) — just blocks with a login prompt; the user
+  // re-pastes the link / re-uploads after logging in.
+  function blockIfLoggedOut(): boolean {
+    if (authSession?.user) return true;
+    pushMsg({ sender: "ai", kind: "login-prompt", text: "Yuk masuk dulu pakai akun Google buat lanjut." });
+    return false;
+  }
+
+  const resumedRef = useRef(false);
+  useEffect(() => {
+    if (!authSession?.user || resumedRef.current) return;
+    resumedRef.current = true;
+    let raw: string | null = null;
+    try {
+      raw = sessionStorage.getItem(PENDING_ACTION_KEY);
+      if (raw) sessionStorage.removeItem(PENDING_ACTION_KEY);
+    } catch {
+      /* ignore */
+    }
+    if (!raw) return;
+    try {
+      const { briefText: savedBrief, pending } = JSON.parse(raw) as { briefText: string; pending: PendingAction };
+      setBriefText(savedBrief);
+      // Re-add the brief bubble lost when the page reloaded for the Google
+      // redirect — keeps the transcript coherent and gives the autosaved
+      // thread a real title instead of the "Obrolan baru" fallback.
+      pushMsg({ sender: "user", kind: "text", text: savedBrief });
+      pushMsg({ sender: "ai", kind: "text", text: "Sip, udah login — lanjut dari sebelumnya ya." });
+      if (pending.type === "duration-default") proceedDurationDefault(savedBrief);
+      else if (pending.type === "duration-custom") proceedCustomDuration(savedBrief, pending.seconds);
+    } catch {
+      /* malformed stash — ignore and let them retype */
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authSession?.user]);
 
   function pushMsg(msg: Omit<ChatMsg, "id">) {
     setMessages((prev) => [...prev, { ...msg, id: nextId() }]);
@@ -338,11 +470,12 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
     return { ok: true as const };
   }
 
-  async function handleDurationDefault(msgId: string) {
-    updateMsg(msgId, { answered: true });
-    setPromptOnlyMode(false);
-    setCustomTotalDuration(null);
-    pushMsg({ sender: "user", kind: "text", text: "Durasi default" });
+  // Split into a thin UI handler + a "proceed" function so the exact same
+  // logic can be re-invoked after a login redirect round-trip (see the
+  // resume-after-login effect above), without needing the original message
+  // bubble (which no longer exists once the page has reloaded for OAuth).
+  async function proceedDurationDefault(brief: string) {
+    if (!requireLogin({ type: "duration-default" })) return;
 
     const charge = await chargeCredits("video");
     if (!charge.ok) {
@@ -365,7 +498,15 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
       });
       return;
     }
-    runConcepts(briefText);
+    runConcepts(brief);
+  }
+
+  function handleDurationDefault(msgId: string) {
+    updateMsg(msgId, { answered: true });
+    setPromptOnlyMode(false);
+    setCustomTotalDuration(null);
+    pushMsg({ sender: "user", kind: "text", text: "Durasi default" });
+    proceedDurationDefault(briefText);
   }
 
   function handleDurationCustom(msgId: string) {
@@ -377,6 +518,25 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
       text: "Oke — mode prompt-only (tanpa video). Ketik total durasi video yang kamu mau dalam detik, HARUS kelipatan 10 (contoh: 10, 20, 100, 120). Kalau bukan kelipatan 10, aku tolak.",
     });
     setPhase("duration-custom");
+  }
+
+  async function proceedCustomDuration(brief: string, n: number) {
+    if (!requireLogin({ type: "duration-custom", seconds: n })) return;
+
+    const charge = await chargeCredits("prompt-only", n);
+    if (!charge.ok) {
+      pushMsg({ sender: "ai", kind: "text", text: charge.error || `Kredit tidak cukup untuk ${n} detik.` });
+      return;
+    }
+
+    setPromptOnlyMode(true);
+    setCustomTotalDuration(n);
+    pushMsg({
+      sender: "ai",
+      kind: "text",
+      text: `Siap — total ${n} detik = ${n / 10} klip @ 10 detik (${n} poin kredit terpakai). Output akhir: prompt Bahasa Inggris per klip, tanpa generate video.`,
+    });
+    runConcepts(brief);
   }
 
   async function handleCustomDurationSubmit() {
@@ -395,25 +555,12 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
     }
     setInput("");
     pushMsg({ sender: "user", kind: "text", text: `${n} detik` });
-
-    const charge = await chargeCredits("prompt-only", n);
-    if (!charge.ok) {
-      pushMsg({ sender: "ai", kind: "text", text: charge.error || `Kredit tidak cukup untuk ${n} detik.` });
-      return;
-    }
-
-    setPromptOnlyMode(true);
-    setCustomTotalDuration(n);
-    pushMsg({
-      sender: "ai",
-      kind: "text",
-      text: `Siap — total ${n} detik = ${n / 10} klip @ 10 detik (${n} poin kredit terpakai). Output akhir: prompt Bahasa Inggris per klip, tanpa generate video.`,
-    });
-    runConcepts(briefText);
+    proceedCustomDuration(briefText, n);
   }
 
   // ─── Reference-video-link flow ───────────────────────────────────────────
   async function handleAnalyzeReference(url: string) {
+    if (!blockIfLoggedOut()) return;
     const loadingId = pushLoading("Nonton & menganalisis video referensi (bisa beberapa menit buat video panjang)...");
     try {
       const data = await callApi("/api/video-ai/analyze-reference", { url, apiKey });
@@ -495,6 +642,7 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
   }
 
   async function handleImageChoiceStoryboard(msgId: string, chosenImage: UploadedRefImage) {
+    if (!blockIfLoggedOut()) return;
     updateMsg(msgId, { answered: true });
     pushMsg({ sender: "user", kind: "text", text: `Buatkan storyboard dari: ${chosenImage.name}` });
 
@@ -521,6 +669,7 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
   }
 
   async function handleImageChoiceDirect(msgId: string, images: UploadedRefImage[]) {
+    if (!blockIfLoggedOut()) return;
     updateMsg(msgId, { answered: true });
     pushMsg({ sender: "user", kind: "text", text: "Langsung generate aja, pakai foto apa adanya." });
     await runImageScenes(
@@ -824,7 +973,7 @@ export const VideoAIChat: React.FC<VideoAIChatProps> = ({ apiKey, onSendToKlipAI
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-4rem)] bg-slate-950 text-slate-100">
+    <div className="flex flex-col h-full bg-slate-950 text-slate-100">
       {/* Header */}
       <div className="p-3 border-b border-slate-800 bg-slate-900/80 flex items-center gap-2.5">
         <div className="w-8 h-8 rounded-xl bg-gradient-to-r from-purple-500 to-indigo-600 flex items-center justify-center shadow">
@@ -1058,6 +1207,17 @@ function ChatBubble({
             >
               🚀 Lihat Paket Generate Video (Rp999.000)
             </Link>
+          </div>
+        )}
+
+        {msg.kind === "login-prompt" && (
+          <div className="mt-2.5 rounded-xl border border-indigo-500/30 bg-indigo-500/10 p-3">
+            <button
+              onClick={() => signIn("google", { callbackUrl: typeof window !== "undefined" ? window.location.href : "/chat" })}
+              className="inline-flex items-center gap-2 text-xs font-black px-3 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 text-white"
+            >
+              Masuk dengan Google
+            </button>
           </div>
         )}
 
