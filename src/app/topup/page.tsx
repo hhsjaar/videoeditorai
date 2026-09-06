@@ -54,11 +54,22 @@ export default function TopupPage() {
     setError(null);
     setLoading(kind === "package999k" ? "package" : "topup");
     try {
-      const res = await fetch("/api/payment/create-transaction", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind, amountRupiah }),
-      });
+      // Defense-in-depth timeout on top of the server's own — a reverse
+      // proxy or the server itself hanging shouldn't leave this button
+      // stuck on "Memproses..." forever with no feedback.
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 25_000);
+      let res: Response;
+      try {
+        res = await fetch("/api/payment/create-transaction", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind, amountRupiah }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Gagal membuat transaksi.");
 
@@ -69,7 +80,7 @@ export default function TopupPage() {
         onError: () => setError("Pembayaran gagal, silakan coba lagi."),
       });
     } catch (err: any) {
-      setError(err.message || "Terjadi kesalahan.");
+      setError(err.name === "AbortError" ? "Server tidak merespons, coba lagi." : err.message || "Terjadi kesalahan.");
     } finally {
       setLoading(null);
     }
